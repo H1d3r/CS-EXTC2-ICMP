@@ -15,6 +15,9 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="icmp.poc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="icmp.c">
       <Filter>Source Files</Filter>
     </ClCompile>

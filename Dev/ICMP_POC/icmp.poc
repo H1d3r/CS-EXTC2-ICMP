@@ -1,11 +1,11 @@
 /*
 POC: ICMP Send/Receive
 
-Pros;
+Pros; 
   - Quiet
 
 
-Cons:
+Cons: 
 
   - No protocol built in safeguards.
     - session tracking
@@ -21,7 +21,7 @@ Fixes:
     PingTunnel?
     Loki?
 
-
+   
 
 Standard ICMP Flow for reference:
 [ Your System  ]                  [ Remote Host (e.g. 8.8.8.8) ]
@@ -54,40 +54,20 @@ struct icmp_header {
     uint8_t Type;          // 8 for Echo Request
     uint8_t Code;          // 0
     uint16_t Checksum;     // Checksum of entire ICMP message
-    uint16_t ID;           // Identifier to match requests/replies 
+    uint16_t ID;           // Identifier to match requests/replies
     uint16_t Sequence;     // Sequence number for tracking requests
 };
 
 Protocol Breakdown:
     IMCP Header=8 bytes (64 bits)
     IP Headers=20
-    Payload=
+    Payload= 
         MTU 1500: 1472 bytes per payload
         Max IPV4 size= 65507-28 = 65,479, but this is known as the ping of death & may flag
         "unix normal": 56 byte default payload field (+8 for header contents = 64 + 20 ipv4 = 84)
         "windows normal": 32 byte default payload field (+8 for header contents + 20 for ipv4 headers = 60)
 
 
-
-Modifications of ICMP protocol for this application:
-
-struct icmp_header {
-    uint8_t Type;          // 8 for Echo Request
-    uint8_t Code;          // 0
-    uint16_t Checksum;     // Checksum of entire ICMP message
-    uint16_t ID;           // Identifier to match requests/replies - lets use PID. 
-    uint16_t Sequence;     // Sequence number for tracking requests. Starts at 0, inline with windows ping behavior
-};
-
-Client sends initial message with length of inbound message. Sequence = 0. Seq 0 is ALWAYS the message size 
-
-Server should allocate a buffer of this size.
-
-Server then monitors for packet with Seq 1 and matching ID. 
-Server appends the data section to the buffer.
-
-When client has sent all data OR a finish flag is received (CANNOT use seq or PID here), server stops listenening, and 
-passes data to Team Server
 
 
 */
@@ -102,10 +82,6 @@ passes data to Team Server
 
 #define ICMP_ECHO 8
 #define ICMP_ECHOREPLY 0
-//size of payload/data section of icmp.
-//ideally, the program will do the math & figure out how to chunk messages based on this size. Currently, it does not
-#define ICMP_PAYLOAD_SIZE 32
-
 
 struct icmp_header {
     BYTE Type;
@@ -114,7 +90,6 @@ struct icmp_header {
     USHORT ID;
     USHORT Sequence;
 };
-
 
 // Checksum function
 USHORT checksum(USHORT* buffer, int size) {
@@ -133,7 +108,7 @@ USHORT checksum(USHORT* buffer, int size) {
 
 // Send ICMP Echo Request
 int send_icmp(SOCKET s, struct sockaddr_in* dest) {
-    char packet[60] = { 0 };
+    char packet[64] = { 0 };
 
     struct icmp_header* icmp = (struct icmp_header*)packet;
     icmp->Type = ICMP_ECHO;
@@ -141,20 +116,19 @@ int send_icmp(SOCKET s, struct sockaddr_in* dest) {
     icmp->ID = (USHORT)GetCurrentProcessId();
     icmp->Sequence = 1;
 
-
     char* data = packet + sizeof(struct icmp_header);
-    strcpy_s(data, ICMP_PAYLOAD_SIZE, "This is a test ICMP payload");
+    strcpy_s(data, 56, "This is a test ICMP payload");
 
     icmp->Checksum = 0;
     icmp->Checksum = checksum((USHORT*)packet, sizeof(packet));
 
     printf("[+] Sending ICMP Echo Request...\n");
 
-    /*
+    /* 
     EX: XOR payload, or do whatever to keep it quiet/obsfuctated, here
 
     encrypt_payload(&payload);
-
+    
     */
 
     int result = sendto(s, packet, sizeof(packet), 0, (SOCKADDR*)dest, sizeof(*dest));
@@ -208,10 +182,9 @@ void recv_icmp(SOCKET s) {
 }
 
 int main() {
-    printf("[+] ICMP WIN\n");
-    const char* SERVER_IP = "127.0.0.1";
+    const char * SERVER_IP = "127.0.0.1";
     printf("[+] SERVER: %s\n", SERVER_IP);
-
+    
     WSADATA wsaData;
     WSAStartup(MAKEWORD(2, 2), &wsaData);
 
