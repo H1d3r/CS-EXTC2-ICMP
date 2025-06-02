@@ -79,7 +79,9 @@ struct icmp_header {
     uint16_t Sequence;     // Sequence number for tracking requests. Starts at 0, inline with windows ping behavior
 };
 
-Client sends initial message with length of inbound message. Sequence = 0. Seq 0 is ALWAYS the message size 
+Client sends initial message with length of inbound message. Sequence = 0. Seq 0 is ALWAYS the message size.
+Messsage should have the first X bytes be a tag. Default is "CS", on first 2 bytes. DO NOT use anything in alphabetical order (ex AB)... that's what normal
+pings send. 
 
 Server should allocate a buffer of this size.
 
@@ -143,8 +145,17 @@ int send_icmp(SOCKET s, struct sockaddr_in* dest) {
     icmp->Sequence = 1;
 
 
+    //tagless version
+    //char* data = packet + sizeof(struct icmp_header);
+    //strcpy_s(data, ICMP_PAYLOAD_SIZE, "ShmingusBingus");
+
+    //tagged version
     char* data = packet + sizeof(struct icmp_header);
-    strcpy_s(data, ICMP_PAYLOAD_SIZE, "ShmingusBingus");
+    const char* tag = "CS";       // 4-byte tag
+    const char* real_data = "ShmingusBingus";  // payload
+
+    // Combine TAG + DATA into buffer safely
+    snprintf(data, ICMP_PAYLOAD_SIZE, "%s%s", tag, real_data);
 
     icmp->Checksum = 0;
     icmp->Checksum = checksum((USHORT*)packet, sizeof(packet));
