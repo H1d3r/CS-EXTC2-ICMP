@@ -4,6 +4,7 @@
 
  - [X] POC bridge
     - [ ] Chunk Handling (ex, max msg size of 32 bytes, how to handle when bigger.)
+        > create a new file called poc_chunked_controller for this.
         Controller side, maybe create a class that holds each communiciation + gets chunks, if seen before, access class, if not, new class?
 
  - [ ] Update readme to have docs/easy to read "how this works"
