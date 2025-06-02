@@ -3,9 +3,15 @@
 #### Todo:
 
  - [X] POC bridge
-    - [ ] Chunk Handling (ex, max msg size of 32 bytes, how to handle when bigger.)
+    - [X] Chunk Handling (ex, max msg size of 32 bytes, how to handle when bigger.)
         > create a new file called poc_chunked_controller for this.
         Controller side, maybe create a class that holds each communiciation + gets chunks, if seen before, access class, if not, new class?
+    
+        Note: Chunks outbound work, aka client > server. Need to figure out best way to handle them on the way back though, maybe just include data in the responses?
+            or have the client do a "checkin" message where it can download what it needs to
+                >> chunked checkin, ex, when downloading a payload. If payload is 100 bytes, and max is 10, it will "checkin" 10 times to get the whole payload until message
+                   is done.
+
 
  - [ ] Update readme to have docs/easy to read "how this works"
  - [ ] CS Integration:
