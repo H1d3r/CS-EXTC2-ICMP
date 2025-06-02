@@ -1,0 +1,199 @@
+/*
+POC: ICMP Send/Receive
+
+Pros; 
+  - Quiet
+
+
+Cons: 
+
+  - No protocol built in safeguards.
+    - session tracking
+
+
+Maybe Problems:
+
+ - Type 8 sends the alphabet on basic ping checks. This might get flagged if not this value
+
+Fixes:
+
+ - Checkout waht some toosl that implemented ICMP did:
+    PingTunnel?
+    Loki?
+
+   
+
+Standard ICMP Flow for reference:
+[ Your System  ]                  [ Remote Host (e.g. 8.8.8.8) ]
+          |                                         |
+          | ------ ICMP Echo Request  ------------> |
+          |                                         |
+          | <----- ICMP Echo Reply  --------------- |
+          |                                         |
+
+
+
+Idea flow for implementation
+     [ (Agent) ]                              [ C2 Server ]
+          |                                         |
+     ---->| ------ ICMP Echo Request  ------------> | (ex, checkin, or send data back)--|
+Do things |                                         |                                   | Server Stuff
+     ^----| <----- ICMP Echo Reply  --------------- | (ex, command coming back) <--------
+          |                                         |
+
+//NOTE: ryan... go review ICMP standards/structure and amke sure you know all of this
+
+
+ICMP Packet makeup (bytes)
+| Type (1) | Code (1) | Checksum (2) | Identifier (2) | Sequence Number (2) | Payload (variable) |
+|----------|----------|--------------|----------------|---------------------|--------------------|
+
+or in a struct:
+
+struct icmp_header {
+    uint8_t Type;          // 8 for Echo Request
+    uint8_t Code;          // 0
+    uint16_t Checksum;     // Checksum of entire ICMP message
+    uint16_t ID;           // Identifier to match requests/replies
+    uint16_t Sequence;     // Sequence number for tracking requests
+};
+
+*/
+
+
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
+#pragma comment(lib, "ws2_32.lib")
+
+#include <stdio.h>
+#include <winsock2.h>
+#include <windows.h>
+
+#define ICMP_ECHO 8
+#define ICMP_ECHOREPLY 0
+
+struct icmp_header {
+    BYTE Type;
+    BYTE Code;
+    USHORT Checksum;
+    USHORT ID;
+    USHORT Sequence;
+};
+
+// Checksum function
+USHORT checksum(USHORT* buffer, int size) {
+    unsigned long cksum = 0;
+    while (size > 1) {
+        cksum += *buffer++;
+        size -= sizeof(USHORT);
+    }
+    if (size) {
+        cksum += *(UCHAR*)buffer;
+    }
+    cksum = (cksum >> 16) + (cksum & 0xffff);
+    cksum += (cksum >> 16);
+    return (USHORT)(~cksum);
+}
+
+// Send ICMP Echo Request
+int send_icmp(SOCKET s, struct sockaddr_in* dest) {
+    char packet[64] = { 0 };
+
+    struct icmp_header* icmp = (struct icmp_header*)packet;
+    icmp->Type = ICMP_ECHO;
+    icmp->Code = 0;
+    icmp->ID = (USHORT)GetCurrentProcessId();
+    icmp->Sequence = 1;
+
+    char* data = packet + sizeof(struct icmp_header);
+    strcpy_s(data, 56, "This is a test ICMP payload");
+
+    icmp->Checksum = 0;
+    icmp->Checksum = checksum((USHORT*)packet, sizeof(packet));
+
+    printf("[+] Sending ICMP Echo Request...\n");
+
+    /* 
+    EX: XOR payload, or do whatever to keep it quiet/obsfuctated, here
+
+    encrypt_payload(&payload);
+    
+    */
+
+    int result = sendto(s, packet, sizeof(packet), 0, (SOCKADDR*)dest, sizeof(*dest));
+    if (result == SOCKET_ERROR) {
+        printf("[-] sendto failed: %d\n", WSAGetLastError());
+        return -1;
+    }
+
+    printf("[+] Packet sent. Dump:\n");
+    printf("    Type: %d\n", icmp->Type);
+    printf("    Code: %d\n", icmp->Code);
+    printf("    ID: %d\n", ntohs(icmp->ID));
+    printf("    Seq: %d\n", ntohs(icmp->Sequence));
+    printf("    Payload: %s\n", data);
+
+    return 0;
+}
+
+// Receive ICMP Echo Reply
+void recv_icmp(SOCKET s) {
+    char recvbuf[1024];
+    SOCKADDR_IN from;
+    int fromlen = sizeof(from);
+
+    printf("[+] Waiting for ICMP Echo Reply...\n");
+
+    int bytes = recvfrom(s, recvbuf, sizeof(recvbuf), 0, (SOCKADDR*)&from, &fromlen);
+    if (bytes == SOCKET_ERROR) {
+        printf("[-] recvfrom failed: %d\n", WSAGetLastError());
+        return;
+    }
+
+    printf("[+] Received %d bytes from %s\n", bytes, inet_ntoa(from.sin_addr));
+
+    // Skip IP header (assumed 20 bytes)
+    struct icmp_header* icmp = (struct icmp_header*)(recvbuf + 20);
+    char* payload = (char*)(recvbuf + 20 + sizeof(struct icmp_header));
+
+    /*
+    EX: Decrypt Payload here (operate directly on payload
+
+    decrypt_payload(&payload);
+
+    */
+
+    printf("    Type: %d\n", icmp->Type);
+    printf("    Code: %d\n", icmp->Code);
+    printf("    ID: %d\n", ntohs(icmp->ID));
+    printf("    Seq: %d\n", ntohs(icmp->Sequence));
+    printf("    Payload: %.*s\n", bytes - 28, payload); // 20 (IP) + 8 (ICMP header)
+}
+
+int main() {
+    const char * SERVER_IP = "127.0.0.1";
+    printf("[+] SERVER: %s\n", SERVER_IP);
+    
+    WSADATA wsaData;
+    WSAStartup(MAKEWORD(2, 2), &wsaData);
+
+
+    printf("[+] Creating raw socket...\n");
+    SOCKET s = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+    if (s == INVALID_SOCKET) {
+        printf("[-] Error creating socket: %d\n", WSAGetLastError());
+        return 1;
+    }
+
+
+    struct sockaddr_in dest;
+    dest.sin_family = AF_INET;
+    dest.sin_addr.s_addr = inet_addr(SERVER_IP);  // Replace with your C2 server IP
+
+    if (send_icmp(s, &dest) == 0) {
+        recv_icmp(s);
+    }
+
+    closesocket(s);
+    WSACleanup();
+    return 0;
+}
