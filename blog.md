@@ -63,6 +63,13 @@ Lets assume that the `ICMP_PAYLOAD_SIZE` is set to 500 bytes.
    - Responses from the TeamServer are wrapped in Echo Replies and sent back to the client, again tagged and sequenced.
 
 
+### In Practice
+
+`<images of it running>` (& basic setup?)
+
+- [ ] Talk about default windows/linux icmp values, and adjustable parameters.
+
+
 ### Resources
 
 Here are resources I found helpful while working on this project:
