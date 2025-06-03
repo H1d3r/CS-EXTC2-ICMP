@@ -243,12 +243,12 @@ char* recv_icmp_fragments(SOCKET s) {
 
             // Print chunk contents for debugging
             printf("[+] Chunk %d: data_bytes=%d\n", seq, data_bytes);
-            printf("    As text: \"%.*s\"\n", data_bytes, payload + TAG_SIZE);
-            printf("    Hex dump: ");
-            for (int i = 0; i < data_bytes; i++) {
-                printf("%02x ", (unsigned char)(payload[TAG_SIZE + i]));
-            }
-            printf("\n");
+            //printf("    As text: \"%.*s\"\n", data_bytes, payload + TAG_SIZE);
+            //printf("    Hex dump: ");
+            //for (int i = 0; i < data_bytes; i++) {
+            //    printf("%02x ", (unsigned char)(payload[TAG_SIZE + i]));
+            //}
+            //printf("\n");
 
             // Copy into reassembly_buffer at correct offset
             int data_per_chunk = ICMP_PAYLOAD_SIZE - TAG_SIZE;
