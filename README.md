@@ -16,6 +16,16 @@
 
 Bugs:
  - Not spawning beacon - no idea why - HOWEVER, if there is a smb beacon already running, it will connect to it if the pipe name is right
+    Going to proceed with this, and worry about the shellcode later
+
+    New issue: decrypt of metadata failed - so the data is not getting to the Extc2 correctly.
+    Has to be something wrong on my end, as the provided example works flawlessly.
+
+Problem: MSVC SUCKS BALLS. use `i686-w64-mingw32-gcc file.c -o example.exe -lws2_32` instead
+
+IT WORKS! problem was extra \0x00 data on the end of the icmp data.
+
+Currently, commands do not get passed to beacons now. yay. Might be another data thing
 
 ---
 # ICMP C2 Protocol Overview
