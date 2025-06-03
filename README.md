@@ -42,7 +42,25 @@ This document provides a high‐level description of how our ICMP-based command-
 - **Chunking**: When the controller needs to send more data than fits in one ICMP packet (500 bytes), it splits the payload into multiple fragments. Each fragment still carries the same 4-byte tag.
 
 ---
+# Setup:
 
+1. Install dependencies:
+
+```
+sudo apt install libpcap0.8-dev
+```
+
+```
+pip install -r Controller/Python/requirements.txt
+```
+
+
+2. Start an External C2 beacon in CS
+
+
+3. run `python3 Controller/Python/controller.py`
+
+---
 ## Overall Flow
 
 1. **Client: “Seq 0” Size Request**  

