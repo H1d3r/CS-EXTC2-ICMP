@@ -35,20 +35,37 @@ As for getting that data between the Client & Controller:
 2. The Controller embeds a response into the Echo Reply, and responds to the Clients Echo Request
 
 
+Getting into it, here’s how the client and controller interact in practice:
 
-Getting into it, this is how those above two work together:
+Lets assume that the `ICMP_PAYLOAD_SIZE` is set to 500 bytes.
 
-1. ... [highish level steps of each action taken by each side]
-2. ...
+> This means that the data/payload field of each ICMP packet will be 500 bytes (4 for tag, 496 for data).
+>
+> Total packet size will be ICMP_PAYLOAD_SIZE + 8 (ICMP header) + 20 (IPV4) Header = 528 Bytes
 
-- **ICMP Echo Request (Type 8)**: Used by the client (“agent”) to signal the server (“controller”) and request data.
-- **ICMP Echo Reply (Type 0)**: Used by the controller to embed and send replies (including large payloads) back to the client.
-- **TAG (4 bytes)**: A fixed 4-byte marker (e.g. `RQ47`) prepended to every ICMP payload, so that unrelated OS pings or network noise are ignored.
-- **Chunking**: When the controller needs to send more data than fits in one ICMP packet (500 bytes), it splits the payload into multiple fragments. Each fragment still carries the same 4-byte tag.
+1. **Client Initialization**
+   The client starts by opening a raw ICMP socket and preparing to communicate with the controller. It embeds a short  message into an **ICMP Echo Request (Type 8)** — this message includes a custom 4-byte tag (`RQ47`) and a 4-byte integer indicating how much data the client expects to receive (e.g., the Beacon payload size). This is sent with **sequence number 0**. Sequence 0 == Give me payload.
+2. **Controller Acknowledgment**
+   When the controller receives this specially crafted Echo Request, it verifies the `RQ47` tag and confirms the request by replying with an **ICMP Echo Reply (Type 0)**, also tagged and marked as **sequence 0**. The reply includes the total size of the payload to be delivered back to the client.
+3. **Payload Delivery (Controller → Client)**
+   The controller breaks the payload into 496-byte* chunks (to avoid fragmentation issues) and sends each as a separate Echo Reply with **increasing sequence numbers** (starting at 1). Each reply is tagged (`RQ47`) and carries its slice of data.
+
+   > *assuming ICMP_PAYLOAD_SIZE is 500 as stated above. To get chunk size, do `ICMP_PAYLOAD_SIZE - 4`
+   >
+4. **Payload Reassembly & Execution (Client)**
+   The client receives the sequence of replies, validates the tag, and reassembles the payload using the sequence numbers. Once all expected fragments have arrived, the full payload (a Beacon) is written to memory and executed.
+5. **Beacon Proxying**
+
+   After launching the Beacon, the client enters a loop where it acts as a transparent proxy:
+
+   - Any Beacon output is wrapped in an **ICMP Echo Request** with `RQ47` and a sequence number > 0.
+   - The controller unwraps this data and forwards it to the Cobalt Strike TeamServer over a local TCP connection.
+   - Responses from the TeamServer are wrapped in Echo Replies and sent back to the client, again tagged and sequenced.
+
 
 ### Resources
 
-Here resources I found helpful while working on this project:
+Here are resources I found helpful while working on this project:
 
 [Fortra - CobaltStrike External C2](https://hstechdocs.helpsystems.com/manuals/cobaltstrike/current/userguide/content/topics/listener-infrastructue_external-c2.htm)
 
