@@ -14,6 +14,9 @@
         Pull & execute payloads
 
 
+Bugs:
+ - Not spawning beacon - no idea why - HOWEVER, if there is a smb beacon already running, it will connect to it if the pipe name is right
+
 ---
 # ICMP C2 Protocol Overview
 
