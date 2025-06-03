@@ -19,27 +19,27 @@ Of all the ICMP message types, Echo Request (Type 8) and Echo Reply (Type 0) off
 
 All the uber technical details can be found [here](https://github.com/ryanq47/CS-EXTC2-ICMP, in the readme of my repo.
 
-<insert image of ext c2 here
+For reference, here's the External C2 flow diagram provided by Fortra.
 
-At a high level, data moves between the Client & Controller as such:
+![Cobalt Strike External C2 Flow](https://www.mdsec.co.uk/wp-content/uploads/2019/02/extc2.png)
+
+At a high level, the execution flow of the client operates in accordance with the above picture:
+
+1. Client asks for payload from Controller
+2. The Client runs the payload, and interfaces with the Beacon
+3. The Client turns into a proxy between the Controller and Beacon
+
+As for getting that data between the Client & Controller:
 
 1. The Client embeds data into an Echo Request and sends to the Controller
 2. The Controller embeds a response into the Echo Reply, and responds to the Clients Echo Request
 
-At a high level, the execution flow of the client operates in accordance with the above image:
-
-1. Client asks for payload from Controller
-2. The client runs the payload, and interfaces with the beacon
-3. The Client turns into a proxy between the Controller and Beacon
 
 
 Getting into it, this is how those above two work together:
 
 1. ... [highish level steps of each action taken by each side]
 2. ...
-
-
-
 
 - **ICMP Echo Request (Type 8)**: Used by the client (“agent”) to signal the server (“controller”) and request data.
 - **ICMP Echo Reply (Type 0)**: Used by the controller to embed and send replies (including large payloads) back to the client.
