@@ -34,7 +34,6 @@ As for getting that data between the Client & Controller:
 1. The Client embeds data into an Echo Request and sends to the Controller
 2. The Controller embeds a response into the Echo Reply, and responds to the Clients Echo Request
 
-
 Getting into it, here’s how the client and controller interact in practice:
 
 Lets assume that the `ICMP_PAYLOAD_SIZE` is set to 500 bytes.
@@ -62,13 +61,15 @@ Lets assume that the `ICMP_PAYLOAD_SIZE` is set to 500 bytes.
    - The controller unwraps this data and forwards it to the Cobalt Strike TeamServer over a local TCP connection.
    - Responses from the TeamServer are wrapped in Echo Replies and sent back to the client, again tagged and sequenced.
 
-
 ### In Practice
 
 `<images of it running>` (& basic setup?)
 
 - [ ] Talk about default windows/linux icmp values, and adjustable parameters.
 
+### Going forward goals:
+
+- [ ] A better written version of the cliente.exe, with evasion techniques added on. Current client.c dones't event try to evade.
 
 ### Resources
 
