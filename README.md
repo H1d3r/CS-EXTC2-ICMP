@@ -32,6 +32,14 @@ Currently, commands do not get passed to beacons now. yay. Might be another data
     [X] Follow up, data is getting *to* the beacon, just not out from it. -> fixed, issue with reading from pipe and null terms.
 
 New problem: Large commands (ex `ls C:\Windows\System32`) do not work. Lkely to data output being too big. Not end of the world... but something to note. 
+    > good news, it doesn't crash teh beacon, just doesn't send all data back
+    > this consistently triggers the "Beacon respnose length eceeds X available bytes, received X + 4 bytes"
+
+Another issue, pivoting, etc requires a new payload to be sent over the wire, which casues some issues cuz it's too big. Probably an issue with payload size, etc? Maybe this isn't as transparent as I thoguht... need to investigate more
+ > fixed by always sending a chunked response to the client, and always receieving a chunked response. This fixes this issue. - note, the checkin timer will freeze up here until the data is received. 
+    Seq 0 still means init payload, and `ls C:\Windows\System32` still doens't work...
+    
+    SO, unlimited lenght of commadns TO the beacon works, just not back
 
 ---
 # ICMP C2 Protocol Overview

