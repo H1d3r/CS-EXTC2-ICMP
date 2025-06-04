@@ -39,7 +39,7 @@ Another issue, pivoting, etc requires a new payload to be sent over the wire, wh
  > fixed by always sending a chunked response to the client, and always receieving a chunked response. This fixes this issue. - note, the checkin timer will freeze up here until the data is received. 
     Seq 0 still means init payload, and `ls C:\Windows\System32` still doens't work...
     
-    SO, unlimited lenght of commadns TO the beacon works, just not back
+    SO, unlimited lenght of commadns TO the beacon works, just not back, (which breaks a good amount of functionality)
 
 ---
 # ICMP C2 Protocol Overview

