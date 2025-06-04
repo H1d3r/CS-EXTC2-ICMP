@@ -224,3 +224,13 @@ def packet_filter(packet):
 
 if __name__ == "__main__":
     go()
+
+
+'''
+LEFT OFF:
+payloads can get sent successfully.
+
+Need to now impelement other side,so that normal seq=0 with NO "PAYLOAD" act as a proxy as intended. 
+
+
+'''
