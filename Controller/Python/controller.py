@@ -232,5 +232,12 @@ payloads can get sent successfully.
 
 Need to now impelement other side,so that normal seq=0 with NO "PAYLOAD" act as a proxy as intended. 
 
+>> do this one:
+OR the better option, just have the client send the get payload commands, THROUGH the proxy. This allows for way less complexty, and each seq=0 to just be for size.
+        self.ts_send_frame(b"arch=x86")
+        self.ts_send_frame(b"pipename=foobar")
+        self.ts_send_frame(b"block=100")
+        self.ts_send_frame(b"go")
+
 
 '''
