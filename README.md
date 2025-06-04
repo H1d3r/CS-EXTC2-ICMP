@@ -29,6 +29,10 @@ Currently, commands do not get passed to beacons now. yay. Might be another data
 
 - [ ] Response esceeds 128bytes... is 132. I wonder if the tag is getting included in there and being sent back to the TeamServer.
 
+    [X] Follow up, data is getting *to* the beacon, just not out from it. -> fixed, issue with reading from pipe and null terms.
+
+New problem: Large commands (ex `ls C:\Windows\System32`) do not work. Lkely to data output being too big. Not end of the world... but something to note. 
+
 ---
 # ICMP C2 Protocol Overview
 
