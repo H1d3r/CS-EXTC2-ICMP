@@ -334,6 +334,7 @@ class ICMP_C2_Handler:
             offset += CHUNK_DATA_SIZE
             seq += 1
             time.sleep(.1)
+    
     # def go(self):
     #     print(f"[+] Attempting to connect to TeamServer External C2 Listener at: {self.server_ip}:{self.server_port}")
     #     self.socket_setup()

