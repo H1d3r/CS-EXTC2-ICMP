@@ -41,7 +41,7 @@ Another issue, pivoting, etc requires a new payload to be sent over the wire, wh
     
     SO, unlimited lenght of commadns TO the beacon works, just not back, (which breaks a good amount of functionality)
 
-    New problem, now not getting command results back with the fragments. Works fine with the old `icmp_recv`, not with `recv_icmp_fragments`
+[ ] New problem, now not getting command results back with the fragments. Works fine with the old `icmp_recv`, not with `recv_icmp_fragments`. Might be a server thing, not sending all the data over, and instead just sending the first packet it recieves back? 
 
 ---
 # ICMP C2 Protocol Overview
