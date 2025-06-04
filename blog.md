@@ -61,6 +61,11 @@ Lets assume that the `ICMP_PAYLOAD_SIZE` is set to 500 bytes.
    - The controller unwraps this data and forwards it to the Cobalt Strike TeamServer over a local TCP connection.
    - Responses from the TeamServer are wrapped in Echo Replies and sent back to the client, again tagged and sequenced.
 
+
+### Challenges
+
+Chunking - hardest/most complicated part
+
 ### In Practice
 
 `<images of it running>` (& basic setup?)
