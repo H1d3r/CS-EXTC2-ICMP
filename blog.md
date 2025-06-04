@@ -4,9 +4,9 @@ Being able to build your own C2 layers has always fascinated me - and you can im
 
 ### Initial Idea
 
-Initially, I just wanted to experiment with External C2 and explore what it was capable of. While working through the example provided by [Fortra](https://hstechdocs.helpsystems.com/manuals/cobaltstrike/current/userguide/content/extc2example.c), I had the idea to try building my own communication layer. Implementing a C2 channel over ICMP had been on my mind for a while, and this seemed like the perfect opportunity to pursue it.
+Initially, I just wanted to experiment with External C2 and explore what it was capable of. While working through the example provided by [Fortra](https://hstechdocs.helpsystems.com/manuals/cobaltstrike/current/userguide/content/extc2example.c), I had the idea to try building my own communication layer. I’d been wanting to build a C2 channel over ICMP—as the C2 matrix shows only two existing implementations (INNUENDO and Nighthawk) —and this project offered the perfect opportunity to do it.
 
-Of all the ICMP message types, Echo Request (Type 8) and Echo Reply (Type 0) offer several advantages:
+Of all the ICMP message types, I settled on Echo Request (Type 8) and Echo Reply (Type 0), as they offer several advantages:
 
 - **Broad network allowance**
   ICMP Echo messages are commonly permitted in many network environments—especially for outbound traffic—making them less likely to be blocked compared to custom TCP or UDP ports.
@@ -69,7 +69,7 @@ Lets assume that the `ICMP_PAYLOAD_SIZE` is set to 500 bytes.
 
 ### Going forward goals:
 
-- [ ] A better written version of the cliente.exe, with evasion techniques added on. Current client.c dones't event try to evade.
+- [ ] A better written version of the client.exe, with evasion techniques added on. Current client.c dones't event try to evade.
 
 ### Resources
 
@@ -80,3 +80,5 @@ Here are resources I found helpful while working on this project:
 [XPN Infosec Blog - Exploring Cobalt Strike's ExternalC2 framework](https://blog.xpnsec.com/exploring-cobalt-strikes-externalc2-framework/)
 
 [Wikipedia ICMP Overview](https://en.wikipedia.org/wiki/Internet_Control_Message_Protocol)
+
+[The C2 Matrix | C2 Matrix](https://howto.thec2matrix.com/)

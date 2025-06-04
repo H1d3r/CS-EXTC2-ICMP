@@ -40,7 +40,7 @@ class ICMP_C2_Handler:
         Needs to be called right after connecting
         '''
         # apparently need to do setup right after connecting
-        self.send_frame(b"arch=x64")
+        self.send_frame(b"arch=x86")
         self.send_frame(b"pipename=foobar")
         self.send_frame(b"block=100")
         self.send_frame(b"go")

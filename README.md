@@ -27,6 +27,8 @@ IT WORKS! problem was extra \0x00 data on the end of the icmp data.
 
 Currently, commands do not get passed to beacons now. yay. Might be another data thing
 
+- [ ] Response esceeds 128bytes... is 132. I wonder if the tag is getting included in there and being sent back to the TeamServer.
+
 ---
 # ICMP C2 Protocol Overview
 
