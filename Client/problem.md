@@ -11,8 +11,13 @@ So, I think thta I'll have to edit the contorller logic to be okay with a 0 size
 [+] seq=0 content: b''
 [-] seq=0 payload too short to contain length -->
 
-
+<!-- 
 New problem:
  Large responses hit an HMAC error on return response. Ex: `bad hmac on 3792 byte message from Beacon x`. No idea why this happens yet, but the data seems to not match up for some reason.
 
- Might be due to the blind rstrip of (\x00)
+ Might be due to the blind rstrip of (\x00) -->
+
+ It all works! Need to tocuh up docs & blog post & clean up some other things & shouldbe good to go
+
+  ... new problem, socket blocks/cuts off when a 2nd client attaches/is downloading a paylaod (it comes back when payload is done) - mayneed to thread the classes. 
+  This works as a POC for now tho
