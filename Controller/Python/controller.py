@@ -309,7 +309,7 @@ def packet_filter(packet):
         logging.info(f"[+] New seq=0 packet received from {client_ip}, ID={icmp_id}")
 
         # Strip off the 4-byte tag (“RQ47”)
-        content = raw_load[len(ICMP_TAG):].rstrip(b"\x00")
+        content = raw_load[len(ICMP_TAG):]#.rstrip(b"\x00")
         logging.info(f"[+] seq=0 content: {content}")
 
         # every other interaction will be here, where it sends a size in seq 0

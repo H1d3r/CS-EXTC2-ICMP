@@ -1,4 +1,4 @@
-PROBLEM:
+<!-- PROBLEM:
 
 I think the problem is that the pipe has no data, and as such bugs out the logic, especially with the chunking.
 
@@ -9,4 +9,10 @@ So, I think thta I'll have to edit the contorller logic to be okay with a 0 size
 [+] Sent ICMP REPLY seq=1, len=5
 [+] New seq=0 packet received from 172.19.240.1, ID=6600
 [+] seq=0 content: b''
-[-] seq=0 payload too short to contain length
+[-] seq=0 payload too short to contain length -->
+
+
+New problem:
+ Large responses hit an HMAC error on return response. Ex: `bad hmac on 3792 byte message from Beacon x`. No idea why this happens yet, but the data seems to not match up for some reason.
+
+ Might be due to the blind rstrip of (\x00)
