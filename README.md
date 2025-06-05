@@ -2,6 +2,10 @@
 
 An ICMP channel for Beacons, implemented using Cobalt Strike’s External C2 framework.
 
+Check out the video here:
+
+<video src="https://ryanq47.github.io/assets/vid/cs_icmp_tunnel.mkv" width="720" height="480" controls></video>
+
 
 ## Key Concepts
 
