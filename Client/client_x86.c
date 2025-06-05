@@ -1,5 +1,5 @@
 ﻿//32 bit version of the client. Should be the saem as the 64 bit but have a seperate version just in case.
-
+//compile with:  `i686-w64-mingw32-gcc client_x86.c -o client_x86.exe -lws2_32`
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
 #pragma comment(lib, "ws2_32.lib")
 
