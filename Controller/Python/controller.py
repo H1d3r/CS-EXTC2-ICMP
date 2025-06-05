@@ -312,17 +312,6 @@ def packet_filter(packet):
         content = raw_load[len(ICMP_TAG):].rstrip(b"\x00")
         logging.info(f"[+] seq=0 content: {content}")
 
-        # # if the client wants the payload, send it.
-        # if content == b"PAYLOAD":
-        #     logging.info("[+] Client requested beacon payload → sending")
-        #     c = Client(client_ip=client_ip, icmp_id=icmp_id, tag=ICMP_TAG, expected_inbound_data_size=0)
-        #     c.send_payload()
-        #     return
-
-        if len(content) < 4:
-            logging.info("[-] seq=0 payload too short to contain length")
-            return
-
         # every other interaction will be here, where it sends a size in seq 0
         expected_inbound_data_size = int.from_bytes(content[:4], "big")
         if expected_inbound_data_size < 0:
