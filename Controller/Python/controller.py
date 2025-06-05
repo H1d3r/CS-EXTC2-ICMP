@@ -1,5 +1,5 @@
 import logging
-from scapy.all import sniff, send, IP, ICMP, Raw
+from scapy.all import sniff, send, IP, ICMP, Raw, AsyncSniffer
 import struct
 import socket
 import math
@@ -224,6 +224,36 @@ class Client:
 
         return bytes(assembled_data)
 
+    # def recv_fragmented_icmp(self):
+    #     expected_len = self.expected_inbound_data_size
+    #     assembled = bytearray()
+    #     sniffer = AsyncSniffer(
+    #         filter=f"icmp and src host {self.client_ip}",
+    #         lfilter=lambda p: (
+    #             p.haslayer(ICMP)
+    #             and p[ICMP].type == 8
+    #             and p[ICMP].id == self.icmp_id
+    #             and p.haslayer(Raw)
+    #             and p[Raw].load.startswith(self.tag.encode())
+    #         ),
+    #         store=False,
+    #         prn=lambda pkt: self._on_fragment(pkt, assembled)
+    #     )
+    #     sniffer.start()
+    #     while len(assembled) < expected_len:
+    #         time.sleep(0.01)
+    #     sniffer.stop()
+    #     return bytes(assembled)
+
+    # def _on_fragment(self, pkt, assembled):
+    #     raw_load = pkt[Raw].load
+    #     chunk = raw_load[TAG_SIZE:]
+    #     needed = self.expected_inbound_data_size - len(assembled)
+    #     assembled.extend(chunk[:needed])
+    #     icmp_seq = pkt[ICMP].seq & 0xFFFF
+    #     self.data_from_client += chunk[:needed]
+    #     logging.debug(f"[+] Received chunk: seq={icmp_seq}, bytes={len(chunk[:needed])}")
+    #     logging.info(f"[+ SNIFFER] packet seq={icmp_seq} from {self.client_ip}")
 
     def send_icmp_packet(self, ip_dst, icmp_id, icmp_seq, payload, tag=b"RQ47"):
         """
@@ -336,7 +366,14 @@ def packet_filter(packet):
             dict_of_clients[key] = client
 
         # Now that we have (or just created) a Client instance, invoke its handler:
-        client.handle_data()
+        # client.handle_data()
+
+        # Replace this:
+        #- client.handle_data()
+        # With this:
+        import threading
+        t = threading.Thread(target=client.handle_data, daemon=True)
+        t.start()
 
 if __name__ == "__main__":
     go()
