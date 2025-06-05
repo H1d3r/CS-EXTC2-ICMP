@@ -38,12 +38,16 @@ Getting into it, here’s how the client and controller interact in practice:
 
 Lets assume that the `ICMP_PAYLOAD_SIZE` is set to 500 bytes.
 
-> This means that the data/payload field of each ICMP packet will be 500 bytes (4 for tag, 496 for data).
+> This means that the data/payload field of each ICMP packet will be up to 500 bytes (4 for tag, 496 for data).
 >
 > Total packet size will be ICMP_PAYLOAD_SIZE + 8 (ICMP header) + 20 (IPV4) Header = 528 Bytes
 
 1. **Client Initialization**
-   The client starts by opening a raw ICMP socket and preparing to communicate with the controller. It embeds a short  message into an **ICMP Echo Request (Type 8)** — this message includes a custom 4-byte tag (`RQ47`) and a 4-byte integer indicating how much data the client expects to receive (e.g., the Beacon payload size). This is sent with **sequence number 0**. Sequence 0 == Give me payload.
+   The client starts by opening a raw ICMP socket and preparing to communicate with the controller. It embeds a short  message into an **ICMP Echo Request (Type 8)** — this message includes a custom 4-byte tag (`RQ47`) and a 4-byte integer indicating how much data the client expects to receive (e.g., the Beacon payload size). This is sent with **sequence number 0**. 
+
+   > There is one special case. if seq = 0, and the data = `b"I WANT A PAYLOAD"`, the controller will request a payload from the teamserver, and forward it on. <br><br>
+   Why is this needed? I ran into some issues with sending the default setup (`arch=X`, `go`, etc) directly from the Client, so the Controller has to send it instead. 
+
 2. **Controller Acknowledgment**
    When the controller receives this specially crafted Echo Request, it verifies the `RQ47` tag and confirms the request by replying with an **ICMP Echo Reply (Type 0)**, also tagged and marked as **sequence 0**. The reply includes the total size of the payload to be delivered back to the client.
 3. **Payload Delivery (Controller → Client)**
@@ -64,7 +68,9 @@ Lets assume that the `ICMP_PAYLOAD_SIZE` is set to 500 bytes.
 
 ### Challenges
 
-Chunking - hardest/most complicated part
+- [ ] Chunking - hardest/most complicated part
+
+- [ ] Beacon going offline while doing large transfers
 
 ### In Practice
 
