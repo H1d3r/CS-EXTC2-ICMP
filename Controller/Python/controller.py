@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 ICMP_TAG = "RQ47"
 TAG_SIZE = len(ICMP_TAG)
-# Must be same as cleint, otherwise data will not get through correctly.
+# Must be same as `ICMP_PAYLOAD_SIZE` in client_x86.c, otherwise data will not get through correctly.
 ICMP_PAYLOAD_SIZE = 1000
 MAX_DATA_PER_CHUNK = ICMP_PAYLOAD_SIZE - TAG_SIZE  # 996
 

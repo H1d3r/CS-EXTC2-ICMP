@@ -38,7 +38,7 @@ would look like fairly normal traffic patterns from windows if you did "ping goo
 Max is 1472, which is the the MTU of 1500 - 20 for IPV4, and 8 for ICMP header
 
 */
-#define ICMP_PAYLOAD_SIZE 1000  // in bytes, 
+#define ICMP_PAYLOAD_SIZE 1000  // in bytes, MUST MATCH VALUE OF `ICMP_PAYLOAD_SIZE` in controller.py
 
 
 //Callback server that the Controller is listenening on
