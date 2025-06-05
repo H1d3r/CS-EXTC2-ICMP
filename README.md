@@ -1,5 +1,7 @@
 # ICMP C2 Protocol Overview
 
+An ICMP channel for Beacons, implemented using Cobalt Strike’s External C2 framework.
+
 
 ## Key Concepts
 

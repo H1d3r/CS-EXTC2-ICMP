@@ -1,8 +1,15 @@
+---
+title: Cobalt Strike - Implementing ICMP using External C2
+date: 2025-06-05 00:00:01 +0600
+categories: [Tools, Cobalt-Strike, Malware]
+tags: [tools, cobalt-strike, malware]     # TAG names should always be lowercase
+---
+
 # Cobalt Strike External C2 & A Beacon ICMP Layer
 
-Being able to build your own C2 layers has always fascinated me - and you can imagine my excitement when I discovred the ability to do this with Cobalt Strike's External C2.
+Being able to build your own C2 layers has always fascinated me - and you can imagine my excitement when I discovered the ability to do this with Cobalt Strike's External C2 - so I decided to explore it a bit!
 
-### Initial Idea
+### Initial Idea:
 
 Initially, I just wanted to experiment with External C2 and explore what it was capable of. While working through the example provided by [Fortra](https://hstechdocs.helpsystems.com/manuals/cobaltstrike/current/userguide/content/extc2example.c), I had the idea to try building my own communication layer. I’d been wanting to build a C2 channel over ICMP—as the C2 matrix shows only two existing implementations (INNUENDO and Nighthawk) —and this project offered the perfect opportunity to do it.
 
@@ -17,7 +24,7 @@ Of all the ICMP message types, I settled on Echo Request (Type 8) and Echo Reply
 
 ### Implementation
 
-All the uber technical details can be found [here](https://github.com/ryanq47/CS-EXTC2-ICMP, in the readme of my repo.
+All the uber technical details can be found [here](https://github.com/ryanq47/CS-EXTC2-ICMP), in the readme of my repo.
 
 For reference, here's the External C2 flow diagram provided by Fortra.
 
@@ -152,7 +159,6 @@ Note: Using default of `1000` bytes as the payload size in this example. If you 
 
 ### Challenges
 
-
 #### Chunking:
 
 Chunking was *by far* the hardest part of this entire project. Figuring out a good protocol setup that allowed for bi-directional comms over ICMP with variable length payloads took a majority of the time.
@@ -161,19 +167,33 @@ The original POC sent only one ICMP packet at a time, which limited the maximum 
 
 Luckily, after thinking it through and getting some help from good old ChatGPT, I was able to implement the chunking protocol described above and get it working—and it works great! It’s completely transparent to the Beacon and fairly flexible, especially thanks to the provided configuration options.
 
-### In Practice:
+### See It in Action
 
-`<images of it running>` (& basic setup?)
+I always get frustrated when README files or blogs don’t actually show a tool in action—so here’s a video demonstrating it working:
+ 
+<video src="/assets/vid/cs_icmp_tunnel.mkv" width="720" height="480" controls></video>
 
-- [ ] Talk about default windows/linux icmp values, and adjustable parameters.
 
-### Going forward goals:
+### Future Objectives:
 
-- [ ] A better written version of the client.exe, with evasion techniques added on. Current client.c dones't event try to evade.
+Below are a few areas I plan to explore next:
+
+1. Hardened Client with Evasion Techniques
+
+I want to build a more resilient client that incorporates proven evasion techniques. Right now, it makes no attempt at stealth and is quickly detected by modern EDR solutions. Even adding basic evasion techniques such as anti-debug checks and using dynamic function resolution would be a vast improvement over the current design.
+
+
+2. Cobalt Strike Add-On for Uncommon Protocols
+
+Additioanlly, I'd like to transform this work into a full Cobalt Strike extension that supports a wider range of protocols beyond the defaults. While the built–in channels cover most use cases, they often feel predictable and are heavily fingerprinted. Adding niche or custom protocols sounds like a really cool project, and may actually get used by someone!
 
 ### Resources
+The link to this project's repo is here:
 
-Here are resources I found helpful while working on this project:
+[Github: CS-EXTC2-ICMP](https://github.com/ryanq47/CS-EXTC2-ICMP)
+
+
+Here are some additional resources I found helpful while working on this project:
 
 [Fortra - CobaltStrike External C2](https://hstechdocs.helpsystems.com/manuals/cobaltstrike/current/userguide/content/topics/listener-infrastructue_external-c2.htm)
 
@@ -182,3 +202,6 @@ Here are resources I found helpful while working on this project:
 [Wikipedia ICMP Overview](https://en.wikipedia.org/wiki/Internet_Control_Message_Protocol)
 
 [The C2 Matrix | C2 Matrix](https://howto.thec2matrix.com/)
+
+
+
