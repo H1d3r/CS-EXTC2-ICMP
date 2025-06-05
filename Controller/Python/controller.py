@@ -72,9 +72,11 @@ class Client:
         
 
 
-        ~~problem - decrpytion error.something isn't getting sent correctly~~
+        ~~problem - decrpytion error.something isn't getting sent correctly~~ fixed
          > Fixed, beacon now sends intiial packet. Follow up packets don't go through yet.
+         Might be something with the client's buffer? something's not being reset
         '''
+        # need to make sure this buffer is clear each new checkin
         self.data_from_client = b""
 
         ######################################################
