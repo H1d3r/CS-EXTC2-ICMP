@@ -65,13 +65,21 @@ https://github.com/user-attachments/assets/cf318981-7adf-4e79-9b58-79e38318d5c4
    ```
    > You may also try a 64-bit MinGW compile (`x86_64-w64-mingw32-gcc ...`) but only the 32-bit build has been fully tested.
 
-5. **Run the controller:**
+5. **disable host ICMP repsonses**
+
+This prevents incorrect ICMP responses from getting sent back from thr host, instead of the ICMP listener.
+
+   ```bash
+   sudo sysctl -w net.ipv4.icmp_echo_ignore_all=1
+   ```
+
+6. **Run the controller:**
 
    ```bash
    python3 Controller/Python/controller.py
    ```
 
-6. **Run the compiled client on the target:**
+7. **Run the compiled client on the target:**
 
    ```bash
    client_x86.exe
