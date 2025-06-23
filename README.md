@@ -67,19 +67,21 @@ https://github.com/user-attachments/assets/cf318981-7adf-4e79-9b58-79e38318d5c4
 
 5. **disable host ICMP repsonses**
 
-This prevents incorrect ICMP responses from getting sent back from thr host, instead of the ICMP listener.
+    This prevents incorrect ICMP responses from getting sent back from the host, instead of the ICMP listener.
+
+   > Note, this effectively disables any normal pings to the server, it looks to be possible to have the Controller respond back to normal/non-implant pings, however I haven't implemented that yet. 
 
    ```bash
    sudo sysctl -w net.ipv4.icmp_echo_ignore_all=1
    ```
 
-6. **Run the controller:**
+7. **Run the controller:**
 
    ```bash
    python3 Controller/Python/controller.py
    ```
 
-7. **Run the compiled client on the target:**
+8. **Run the compiled client on the target:**
 
    ```bash
    client_x86.exe
