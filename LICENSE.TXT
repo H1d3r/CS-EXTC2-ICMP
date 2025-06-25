@@ -1,6 +1,7 @@
 /*
 
 Copyright 2016-2019 Strategic Cyber LLC
+Copyright 2025 Ryan Kleffman
 
 Redistribution and use in source and binary forms, with or without modification, are permitted provided that the 
 following conditions are met:
