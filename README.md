@@ -87,7 +87,7 @@ https://github.com/user-attachments/assets/cf318981-7adf-4e79-9b58-79e38318d5c4
 
     - cap_net_raw+ep is the POSIX capability that lets the ELF binary open raw sockets.
 
-    - Pointing at $(realpath $(which python3)) ensures you’re capping the actual interpreter ELF, not a symlink.
+    - Pointing at `$(realpath $(which python3))` ensures you’re capping the actual interpreter ELF, not a symlink (This fixed the VENV symlink issue)
 
     - Any script run under that interpreter—whether in a venv or system—now inherits the raw‐socket permission, so you no longer need to prefix with sudo.
 
