@@ -81,7 +81,11 @@ https://github.com/user-attachments/assets/cf318981-7adf-4e79-9b58-79e38318d5c4
    python3 Controller/Python/controller.py
    ```
 
-8. **Run the compiled client on the target:**
+   > Note, if you don't want to run this as root, you will need to give python the permissions to do raw ICMP packets. The following command should enabel this, and yes, it works in VENV's as well:
+
+   `sudo setcap net raw+ep $(realpath $(which python3))`
+
+9. **Run the compiled client on the target:**
 
    ```bash
    client_x86.exe
