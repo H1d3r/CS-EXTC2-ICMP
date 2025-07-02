@@ -71,6 +71,8 @@ https://github.com/user-attachments/assets/cf318981-7adf-4e79-9b58-79e38318d5c4
 
    > Note, this effectively disables any normal pings to the server, it looks to be possible to have the Controller respond back to normal/non-implant pings, however I haven't implemented that yet. 
 
+   > If the `client` is crashing, see how many packets are receieved. If 1: the below command has not run, and ICMP responses are still enabled on the system. 
+
    ```bash
    sudo sysctl -w net.ipv4.icmp_echo_ignore_all=1
    ```
